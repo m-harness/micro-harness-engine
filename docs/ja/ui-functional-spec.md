@@ -1,3 +1,5 @@
+[English](../en/ui-functional-spec.md) | 日本語
+
 # microHarnessEngine Web UI 機能仕様書
 
 > **目的**: UI の見た目を完全に作り直す際に、機能が一切失われないようにするための仕様書。

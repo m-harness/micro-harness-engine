@@ -1,3 +1,5 @@
+[English](../en/channels.md) | 日本語
+
 # Channels
 
 Web UI / Slack / Discord / API クライアントの接続と設定方法です。

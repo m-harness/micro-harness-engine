@@ -1,3 +1,5 @@
+[English](../en/configuration.md) | 日本語
+
 # Configuration
 
 すべての環境変数と設定項目のリファレンスです。

@@ -1,3 +1,5 @@
+[English](../en/architecture.md) | 日本語
+
 # Architecture
 
 microHarnessEngineのシステム構成とデータフローの詳細です。
