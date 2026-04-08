@@ -1,0 +1,29 @@
+{
+	"name": "micro-harness-engine",
+	"version": "1.0.0",
+	"type": "module",
+	"scripts": {
+		"start": "node src/index.js",
+		"dev": "node --watch-path=src src/index.js",
+		"dev:web": "npm --prefix src/admin-web run dev",
+		"dev:full": "concurrently -n api,web -c blue,green \"npm run dev\" \"npm run dev:web\"",
+		"build:web": "npm --prefix src/admin-web run build",
+		"cli": "node src/cli-root.js",
+		"test": "vitest run",
+		"test:unit": "vitest run tests/unit",
+		"test:integration": "vitest run tests/integration",
+		"test:e2e": "vitest run tests/e2e",
+		"test:watch": "vitest",
+		"test:coverage": "vitest run --coverage",
+		"setup": "npm install && npm run build:web"
+	},
+	"dependencies": {
+		"@anthropic-ai/sdk": "^0.54.0",
+		"better-sqlite3": "^11.10.0",
+		"dotenv": "^16.4.7"
+	},
+	"devDependencies": {
+		"concurrently": "^9.2.1",
+		"vitest": "^4.1.3"
+	}
+}

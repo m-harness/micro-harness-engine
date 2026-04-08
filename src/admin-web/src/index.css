@@ -1,0 +1,216 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=IBM+Plex+Sans+JP:wght@400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+	:root {
+		--background: 210 40% 98%;
+		--foreground: 222 47% 11%;
+		--card: 0 0% 100%;
+		--card-foreground: 222 47% 11%;
+		--popover: 0 0% 100%;
+		--popover-foreground: 222 47% 11%;
+		--primary: 239 84% 67%;
+		--primary-foreground: 0 0% 100%;
+		--secondary: 215 20% 65%;
+		--secondary-foreground: 0 0% 100%;
+		--muted: 210 40% 96%;
+		--muted-foreground: 215 16% 47%;
+		--accent: 210 40% 96%;
+		--accent-foreground: 222 47% 11%;
+		--destructive: 0 72% 51%;
+		--destructive-foreground: 0 0% 100%;
+		--success: 152 61% 23%;
+		--success-foreground: 0 0% 100%;
+		--border: 214 32% 91%;
+		--input: 214 32% 91%;
+		--ring: 239 84% 67%;
+		--radius: 0.625rem;
+	}
+
+	.dark {
+		--background: 224 30% 5%;
+		--foreground: 210 40% 98%;
+		--card: 217 33% 17%;
+		--card-foreground: 210 40% 98%;
+		--popover: 217 33% 17%;
+		--popover-foreground: 210 40% 98%;
+		--primary: 235 82% 76%;
+		--primary-foreground: 224 30% 5%;
+		--secondary: 215 20% 65%;
+		--secondary-foreground: 224 30% 5%;
+		--muted: 217 33% 17%;
+		--muted-foreground: 215 20% 65%;
+		--accent: 217 33% 17%;
+		--accent-foreground: 210 40% 98%;
+		--destructive: 0 62% 50%;
+		--destructive-foreground: 0 0% 100%;
+		--success: 152 50% 36%;
+		--success-foreground: 0 0% 100%;
+		--border: 217 24% 27%;
+		--input: 217 24% 27%;
+		--ring: 235 82% 76%;
+	}
+
+	html,
+	body,
+	#root {
+		min-height: 100%;
+	}
+
+	* {
+		@apply border-border;
+	}
+
+	body {
+		@apply bg-background text-foreground antialiased;
+		min-height: 100vh;
+	}
+
+	pre {
+		white-space: pre-wrap;
+		word-break: break-word;
+	}
+
+	::selection {
+		background: hsl(239 84% 67% / 0.22);
+	}
+}
+
+/* Markdown styles for agent message bubbles */
+.markdown-body h1 {
+	@apply mt-4 mb-2 text-lg font-bold first:mt-0;
+}
+.markdown-body h2 {
+	@apply mt-3 mb-2 text-base font-bold first:mt-0;
+}
+.markdown-body h3 {
+	@apply mt-3 mb-1 text-sm font-semibold first:mt-0;
+}
+.markdown-body h4 {
+	@apply mt-2 mb-1 text-sm font-medium first:mt-0;
+}
+.markdown-body p {
+	@apply mb-2 whitespace-pre-wrap break-words last:mb-0;
+}
+.markdown-body pre {
+	@apply my-2 rounded-md bg-muted p-3 font-mono text-xs leading-5 overflow-x-auto;
+}
+.markdown-body pre code {
+	@apply bg-transparent p-0;
+}
+.markdown-body code {
+	@apply rounded bg-muted px-1.5 py-0.5 font-mono text-xs;
+}
+.markdown-body ul {
+	@apply mb-2 ml-5 list-disc space-y-0.5;
+}
+.markdown-body ol {
+	@apply mb-2 ml-5 list-decimal space-y-0.5;
+}
+.markdown-body li > ul,
+.markdown-body li > ol {
+	@apply mb-0 mt-0.5;
+}
+.markdown-body table {
+	@apply my-2 w-full border-collapse text-xs;
+}
+.markdown-body th {
+	@apply border border-border bg-muted px-2 py-1 text-left font-semibold;
+}
+.markdown-body td {
+	@apply border border-border px-2 py-1;
+}
+.markdown-body a {
+	@apply text-primary underline underline-offset-2;
+}
+.markdown-body blockquote {
+	@apply my-2 border-l-2 border-primary/40 pl-3 italic text-muted-foreground;
+}
+.markdown-body hr {
+	@apply my-3 border-border;
+}
+.markdown-body strong {
+	@apply font-semibold;
+}
+.markdown-body em {
+	@apply italic;
+}
+.markdown-body img {
+	@apply my-2 max-w-full rounded;
+}
+.markdown-body input[type="checkbox"] {
+	@apply mr-1.5;
+}
+
+/* Login page animated gradient background */
+.login-bg {
+	background: hsl(var(--background));
+}
+
+.login-blob {
+	position: absolute;
+	border-radius: 50%;
+	filter: blur(80px);
+	opacity: 0.55;
+}
+
+.dark .login-blob {
+	opacity: 0.75;
+	filter: blur(90px);
+}
+
+.login-blob-1 {
+	width: 700px;
+	height: 700px;
+	background: radial-gradient(circle, hsl(239 84% 60% / 0.7), transparent 65%);
+	top: -20%;
+	left: -10%;
+	animation: blob-drift-1 14s ease-in-out infinite alternate;
+}
+
+.login-blob-2 {
+	width: 600px;
+	height: 600px;
+	background: radial-gradient(circle, hsl(280 65% 55% / 0.6), transparent 65%);
+	bottom: -15%;
+	right: -8%;
+	animation: blob-drift-2 16s ease-in-out infinite alternate;
+}
+
+.login-blob-3 {
+	width: 500px;
+	height: 500px;
+	background: radial-gradient(circle, hsl(200 80% 55% / 0.5), transparent 65%);
+	top: 35%;
+	left: 45%;
+	animation: blob-drift-3 12s ease-in-out infinite alternate;
+}
+
+@keyframes blob-drift-1 {
+	0%   { transform: translate(0, 0) scale(1); }
+	100% { transform: translate(100px, 70px) scale(1.2); }
+}
+
+@keyframes blob-drift-2 {
+	0%   { transform: translate(0, 0) scale(1); }
+	100% { transform: translate(-80px, -60px) scale(1.15); }
+}
+
+@keyframes blob-drift-3 {
+	0%   { transform: translate(0, 0) scale(1); }
+	100% { transform: translate(-50px, 50px) scale(1.25); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+	*,
+	*::before,
+	*::after {
+		animation-duration: 0.01ms !important;
+		animation-iteration-count: 1 !important;
+		transition-duration: 0.01ms !important;
+		scroll-behavior: auto !important;
+	}
+}
