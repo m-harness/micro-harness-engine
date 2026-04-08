@@ -1,3 +1,5 @@
+[English](../en/data-model.md) | 日本語
+
 # Data Model
 
 SQLiteデータベースのスキーマとリレーションの詳細です。

@@ -1,3 +1,5 @@
+[English](../en/admin-guide.md) | 日本語
+
 # Admin Guide
 
 管理画面 (`/admin`) の全機能解説です。

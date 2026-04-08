@@ -1,3 +1,5 @@
+[English](../en/policy-guide.md) | 日本語
+
 # Policy Guide
 
 microHarnessEngineのポリシーシステムの仕組みと設定方法です。

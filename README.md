@@ -1,141 +1,143 @@
+English | [日本語](./README.ja.md)
+
 <p align="center">
   <h1 align="center">microHarnessEngine</h1>
   <p align="center"><strong>Policy-Driven Secure AI Assistant Engine</strong></p>
   <p align="center">
     <a href="./LICENSE">MIT License</a> ·
-    <a href="./docs/index.md">Documentation</a> ·
-    <a href="./docs/getting-started.md">Getting Started</a>
+    <a href="./docs/en/index.md">Documentation</a> ·
+    <a href="./docs/en/getting-started.md">Getting Started</a>
   </p>
 </p>
 
 ---
 
-AIアシスタントのセキュリティは急速に進化しています。
-確認プロンプト、サンドボックス、`.gitignore` ベースの除外 — 各ツールがそれぞれのアプローチで対策を進めています。
+AI assistant security is evolving rapidly.
+Confirmation prompts, sandboxes, `.gitignore`-based exclusions — each tool takes its own approach.
 
-しかし、多くのAIアシスタントは **「まず許可し、危険なものを制限する」** という設計が出発点にあります。
+However, many AI assistants start from a design that **"allows everything first, then restricts what's dangerous."**
 
-**microHarnessEngine** は逆のアプローチを取ります。
+**microHarnessEngine** takes the opposite approach.
 
 ```
-Default Allow:  すべて許可 → 危険なものを後から制限
-Default Deny:   すべて拒否 → 必要なものだけ明示的に許可
+Default Allow:  Permit everything → Restrict dangerous things later
+Default Deny:   Deny everything → Explicitly permit only what's needed
 ```
 
-初期状態では何の権限もありません。どのツールを使えるか、どのファイルにアクセスできるかを、ユーザーごとにポリシーで明示的に許可します。そして、機密情報の保護はプロンプトの遵守に頼らず、コードレベルで強制します。
+In the initial state, no permissions are granted. Which tools can be used and which files can be accessed are explicitly permitted per user through policies. And protection of sensitive information is enforced at the code level, not relying on prompt compliance.
 
-多くのAIアシスタントは **「1人のユーザーが自分のために使う」** ことを前提に設計されています。
+Many AI assistants are designed with the assumption that **"one user uses it for themselves."**
 
-microHarnessEngineは違います。**1つのプロジェクト、1つのチームに導入する**ことを想定した基盤エンジンです。
+microHarnessEngine is different. It is a foundation engine designed to be **deployed for a single project or team.**
 
-メンバーごとに異なる権限を設定し、危険な操作にはチームの承認フローを挟む — 個人ツールではなく、**チームのインフラ**として機能します。
+Set different permissions for each member, require team approval workflows for dangerous operations — it functions as **team infrastructure**, not a personal tool.
 
-WordPressの上にオリジナルのブログを構築するように、microHarnessEngineの上にプロジェクト専用のAIアシスタントを構築できます。
+Just as you can build a custom blog on top of WordPress, you can build a project-specific AI assistant on top of microHarnessEngine.
 
-> そのままでも通常のAIアシスタントとしてすぐに使えます。カスタマイズは必要になってから。
+> It works as a regular AI assistant out of the box. Customize when you need to.
 
 ---
 
-## microHarnessEngineの設計思想
+## Design Philosophy
 
-| 設計方針 | アプローチ |
+| Principle | Approach |
 |---|---|
-| **Default Deny** | 新規ユーザーには何の権限も付与しない。ポリシーで明示的に許可する |
-| **コードレベルの保護** | 機密情報の遮断をLLMのプロンプト遵守に依存せず、実行エンジン側で強制する |
-| **ユーザー別の権限制御** | ツールの使用許可・ファイルアクセス範囲をユーザーごとに設定 |
-| **承認ワークフロー** | 破壊的操作はエージェントを一時停止し、人間の承認を経てから実行する |
-| **プロバイダ非依存** | Claude / OpenAI / Gemini を `.env` で切り替え。特定ベンダーに依存しない |
-| **ポリシー管理下のMCP** | 外部MCPサーバーのツールも同じポリシーエンジンの管理下で統合 |
+| **Default Deny** | No permissions are granted to new users. Permissions must be explicitly allowed via policy |
+| **Code-Level Protection** | Sensitive information blocking is enforced by the execution engine, not relying on LLM prompt compliance |
+| **Per-User Access Control** | Tool usage permissions and file access scope are configured per user |
+| **Approval Workflow** | Destructive operations pause the agent and require human approval before execution |
+| **Provider Agnostic** | Switch between Claude / OpenAI / Gemini via `.env`. No vendor lock-in |
+| **Policy-Managed MCP** | External MCP server tools are integrated under the same policy engine |
 
 ---
 
-## 3層防壁 — LLMのプロンプト遵守に頼らないセキュリティ
+## 3-Layer Defense — Security That Doesn't Rely on LLM Prompt Compliance
 
-「`.env`を読まないでください」というプロンプト指示は、prompt injectionで上書きされる可能性があります。
-microHarnessEngineは **LLMの行動規範に頼らず、コードレベルで強制される3つの防壁** で情報を守ります。
+A prompt instruction like "don't read `.env`" can be overridden by prompt injection.
+microHarnessEngine protects information with **3 layers of defense enforced at the code level**, not relying on LLM behavioral guidelines.
 
-### Layer 1: LLMに存在を教えない
+### Layer 1: Don't Reveal Its Existence to the LLM
 
-LLMが情報に触れる**すべての面**で保護対象を遮断します。
+Protected items are blocked at **every surface** where the LLM touches information.
 
-| 遮断ポイント | 動作 |
+| Blocking Point | Behavior |
 |---|---|
-| **ツール定義** | ポリシーで許可されたツールだけをLLMのスキーマに含める。許可されていないツールはLLMから見えない |
-| **ディレクトリ一覧** | `list_files` の結果から保護対象を除外。LLMにはファイルの存在自体が見えない |
-| **検索・glob** | 検索結果・パターンマッチ結果からも保護対象を除外 |
-| **会話履歴** | LLMに送信する前に、過去の会話履歴内の機密パターンを墨消し |
+| **Tool Definitions** | Only tools permitted by policy are included in the LLM's schema. Unpermitted tools are invisible to the LLM |
+| **Directory Listings** | Protected items are excluded from `list_files` results. The LLM can't even see that the file exists |
+| **Search & Glob** | Protected items are excluded from search results and pattern match results |
+| **Conversation History** | Sensitive patterns in past conversation history are redacted before sending to the LLM |
 
-### Layer 2: 要求されても実行しない
+### Layer 2: Don't Execute Even If Requested
 
-ツール実行は**複数の独立したゲート**を直列に通過しなければなりません。
+Tool execution must pass through **multiple independent gates** in series.
 
 ```
-ツール実行リクエスト
+Tool Execution Request
   │
-  ├─ Gate 1: Tool Policy ── ユーザーにそのツールの使用が許可されているか？
+  ├─ Gate 1: Tool Policy ── Is the user permitted to use this tool?
   │
-  ├─ Gate 2: File Policy ── 対象パスがユーザーのアクセス範囲内か？
+  ├─ Gate 2: File Policy ── Is the target path within the user's access scope?
   │
-  ├─ Gate 3: Protection Rules ── アクション別(read/write/delete/discover)の保護ルール評価
-  │                               パターンマッチ(exact/dirname/glob) + 優先度制御
+  ├─ Gate 3: Protection Rules ── Evaluate protection rules per action (read/write/delete/discover)
+  │                               Pattern matching (exact/dirname/glob) + priority control
   │
-  └─ Gate 4: Approval ── 破壊的操作はエージェントを一時停止し、人間の承認を待機
+  └─ Gate 4: Approval ── Pause the agent for destructive operations and wait for human approval
 ```
 
-どれか1つのゲートで拒否されれば、実行は行われません。
+If any single gate denies the request, execution does not proceed.
 
-### Layer 3: 実行結果をLLMに渡さない
+### Layer 3: Don't Pass Execution Results to the LLM
 
-万が一ツールが実行されても、出力は**3段階で墨消し**されます。
+Even if a tool executes, output is **redacted in 3 stages**.
 
-| 段階 | 動作 |
+| Stage | Behavior |
 |---|---|
-| **ツール結果** | Content Classifierが出力をスキャン。APIキー・トークン・PEM秘密鍵など6種のパターンを `[REDACTED: api_key]` 等に置換 |
-| **LLM返却前** | 会話メッセージ全体をサニタイズしてからLLMに送信 |
-| **DB保存前** | データベースに永続化する前にも墨消しを適用。ログにも機密情報を残さない |
+| **Tool Results** | Content Classifier scans output. Replaces 6 pattern types (API keys, tokens, PEM private keys, etc.) with `[REDACTED: api_key]` |
+| **Before LLM Return** | Sanitizes the entire conversation message before sending to the LLM |
+| **Before DB Save** | Applies redaction before persisting to database. No sensitive information left in logs |
 
-### 各層は独立して機能する
+### Each Layer Operates Independently
 
-**どの1層が突破されても、残りの層が情報を守ります。**
-すべての拒否判定は**監査ログ**に記録され、どのルールが発動したかを事後検証できます。
-
----
-
-## 主な特徴
-
-### セキュリティ
-
-- **Default Deny** — 新規ユーザーには何の権限も与えない
-- **Tool Policy** — ユーザーごとに使用可能なツールをホワイトリストで制御
-- **File Policy** — ユーザーごとにアクセス可能なパスを制御
-- **Protection Engine** — パスベース + コンテンツベースの機密情報保護
-- **Approval Workflow** — 破壊的操作は人間の承認を待機
-
-### プラットフォーム
-
-- **Multi-Provider** — Claude / OpenAI / Gemini を `.env` で切り替え
-- **MCP連携** — 外部MCPサーバーのツールをポリシー管理下で統合
-- **Plugin Architecture** — ツールをプラグインとして追加可能
-- **Web管理画面** — すべてのセキュリティ設定をGUIで操作
-
-### エージェント
-
-- **Agent Loop** — LLM ↔ ツール実行の自律ループ
-- **Auto Recovery** — エラー時の自動リカバリ・再開
-- **Automation** — チャットから自然言語で定期実行タスクを作成
-- **Skills** — Markdownベースのカスタムプロンプトテンプレート
+**Even if one layer is breached, the remaining layers protect the information.**
+All denial decisions are recorded in **audit logs**, enabling post-incident verification of which rules were triggered.
 
 ---
 
-## 3つの方法で、あなた専用のアシスタントに
+## Key Features
 
-microHarnessEngineは **3つのレイヤー** で拡張できます。
-どれも数分で追加でき、すべてセキュリティポリシーの管理下で動作します。
+### Security
 
-### ツールプラグイン — JSファイルを置くだけ
+- **Default Deny** — No permissions granted to new users
+- **Tool Policy** — Whitelist-based control of available tools per user
+- **File Policy** — Path-based access control per user
+- **Protection Engine** — Path-based + content-based sensitive information protection
+- **Approval Workflow** — Destructive operations wait for human approval
 
-`tools/` ディレクトリにフォルダを作り、ツール定義を書くだけ。
-サーバー起動時に自動で検出・登録されます。
+### Platform
+
+- **Multi-Provider** — Switch between Claude / OpenAI / Gemini via `.env`
+- **MCP Integration** — Integrate external MCP server tools under policy management
+- **Plugin Architecture** — Add tools as plugins
+- **Web Admin Console** — Manage all security settings via GUI
+
+### Agent
+
+- **Agent Loop** — Autonomous LLM ↔ tool execution loop
+- **Auto Recovery** — Automatic recovery and resumption on errors
+- **Automation** — Create scheduled tasks from chat using natural language
+- **Skills** — Markdown-based custom prompt templates
+
+---
+
+## Three Ways to Make It Your Own
+
+microHarnessEngine is extensible through **3 layers.**
+Each takes just minutes to add, and all operate under security policy management.
+
+### Tool Plugins — Just Drop a JS File
+
+Create a folder in the `tools/` directory and write a tool definition.
+It's automatically detected and registered on server startup.
 
 ```js
 // tools/my-plugin/index.js
@@ -150,24 +152,24 @@ export const plugin = {
 }
 ```
 
-パス解決・承認ワークフロー・保護チェックなど、セキュリティ機能は `context.helpers` として提供されるため、ツール開発者はビジネスロジックに集中できます。
+Security features like path resolution, approval workflows, and protection checks are provided as `context.helpers`, so tool developers can focus on business logic.
 
-### スキル — Markdownを書くだけ
+### Skills — Just Write Markdown
 
-`skills/` に `.md` ファイルを置くだけで、LLMが参照できるナレッジになります。
-コード不要・スキーマ不要・再起動不要。
+Place `.md` files in `skills/` and they become knowledge the LLM can reference.
+No code required, no schema required, no restart required.
 
 ```
 skills/
-└── deploy-guide.md    ← 置くだけで有効
+└── deploy-guide.md    ← Active just by placing it
 └── review-checklist.md
 ```
 
-チームのベストプラクティス、コーディング規約、デプロイ手順 — ドキュメントがそのままAIアシスタントの「知識」になります。
+Team best practices, coding standards, deployment procedures — documents become your AI assistant's "knowledge" as-is.
 
-### MCP連携 — JSONで設定するだけ
+### MCP Integration — Just Configure JSON
 
-外部MCPサーバーのツールを `mcp.json` に追加するだけで統合。Claude Desktop互換のフォーマットで、コードを一行も書く必要がありません。
+Add external MCP server tools to `mcp.json` for integration. Uses Claude Desktop-compatible format — no code needed.
 
 ```json
 {
@@ -181,11 +183,11 @@ skills/
 }
 ```
 
-stdio・HTTP両対応。接続するとツールが自動で登録され、ビルトインツールと同じポリシー管理下で利用できます。
+Supports both stdio and HTTP. Once connected, tools are automatically registered and available under the same policy management as built-in tools.
 
 ---
 
-## アーキテクチャ
+## Architecture
 
 ```mermaid
 graph TB
@@ -205,14 +207,14 @@ graph TB
             POLICY_CHK["Tool Policy / File Policy"]
             PROTECT["Protection Engine"]
             MATCHER["Path Matcher<br/>exact / dirname / glob"]
-            CLASSIFIER["Content Classifier<br/>APIキー・トークン検出"]
+            CLASSIFIER["Content Classifier<br/>API Key & Token Detection"]
             APPROVAL["Approval Workflow"]
         end
 
         subgraph ToolSystem["Tool System"]
-            REGISTRY["Tool Registry<br/>実行ゲートウェイ"]
-            CATALOG["Plugin Catalog<br/>動的読み込み"]
-            MCP_MGR["MCP Manager<br/>外部ツール統合"]
+            REGISTRY["Tool Registry<br/>Execution Gateway"]
+            CATALOG["Plugin Catalog<br/>Dynamic Loading"]
+            MCP_MGR["MCP Manager<br/>External Tool Integration"]
         end
 
         subgraph Providers["LLM Providers"]
@@ -239,19 +241,19 @@ graph TB
     PROTECT --> DB
 ```
 
-すべてのツール実行は **Security Layer を必ず通過** します。MCP連携ツールも例外ではありません。
+All tool executions **must pass through the Security Layer.** MCP-integrated tools are no exception.
 
 ---
 
-## クイックスタート
+## Quick Start
 
 ```bash
-git clone https://github.com/your-org/microHarnessEngine.git
-cd microHarnessEngine
+git clone https://github.com/m-harness/micro-harness-engine.git
+cd micro-harness-engine
 npm install
 ```
 
-`.env` を作成:
+Create `.env`:
 
 ```env
 LLM_PROVIDER=anthropic
@@ -263,79 +265,79 @@ ADMIN_RUNTIME_PASSWORD=your-admin-password
 npm start
 ```
 
-| URL | 用途 |
+| URL | Purpose |
 |---|---|
-| `http://localhost:4310/` | チャット UI |
-| `http://localhost:4310/admin` | 管理画面 |
+| `http://localhost:4310/` | Chat UI |
+| `http://localhost:4310/admin` | Admin Console |
 
-### 開発モード
+### Development Mode
 
-バックエンドAPIとWeb UIの開発サーバーを同時に起動:
+Start the backend API and Web UI dev server simultaneously:
 
 ```bash
 npm run dev:full
 ```
 
-| URL | 用途 |
+| URL | Purpose |
 |---|---|
-| `http://localhost:4173/` | Web UI（Vite HMR有効、APIは自動プロキシ） |
-| `http://localhost:4310/` | バックエンドAPI（ファイル変更で自動リロード） |
+| `http://localhost:4173/` | Web UI (Vite HMR enabled, API auto-proxied) |
+| `http://localhost:4310/` | Backend API (auto-reload on file changes) |
 
-### 最初のステップ
+### First Steps
 
-1. 管理画面にログイン（`root` / 設定したパスワード）
-2. ユーザーを作成
-3. Tool Policy を作成し、許可するツールを選択
-4. ユーザーに Policy を割り当て
-5. チャットUIでログインして使い始める
+1. Log in to the admin console (`root` / your configured password)
+2. Create a user
+3. Create a Tool Policy and select the tools to allow
+4. Assign the Policy to the user
+5. Log in to the Chat UI and start using it
 
-詳しくは [Getting Started](./docs/getting-started.md) を参照。
+See [Getting Started](./docs/en/getting-started.md) for details.
 
 ---
 
-## 活用事例
+## Use Cases
 
-### チーム開発でのAIアシスタント
+### AI Assistant for Team Development
 
 ```
-新人エンジニア  → read_file, search のみ許可
-シニアエンジニア → 全ファイル操作 + git操作を許可
-リーダー        → 全ツール + MCP連携を許可
+Junior Engineer  → read_file, search only
+Senior Engineer  → All file operations + git operations
+Team Lead        → All tools + MCP integration
 ```
 
-ユーザーごとに権限を細かく制御。新人がうっかり本番設定を壊す心配がありません。
+Fine-grained per-user permission control. No risk of a junior accidentally breaking production configs.
 
-### 自動レポート・定期タスク
+### Automated Reports & Scheduled Tasks
 
-「毎日9時にgit logを集計してレポートを作成して」のように、チャットから自然言語でAutomationを作成。スケジューラーが自動実行します。
+Create Automations from chat using natural language like "Check disk usage every morning at 9am and create a report." The scheduler runs them automatically.
 
-### MCPサーバーの安全な統合
+### Secure MCP Server Integration
 
-外部のMCPサーバーが提供するツールも、microHarnessEngineのポリシー管理下に統合。ツールごとにどのユーザーが使えるかを制御できます。
+Tools provided by external MCP servers are integrated under microHarnessEngine's policy management. Control which users can use each tool.
 
 ---
 
-## ドキュメント
+## Documentation
 
-| ドキュメント | 内容 |
+| Document | Description |
 |---|---|
-| **[Getting Started](./docs/getting-started.md)** | インストール・初期設定・最初のチャットまで |
-| **[Architecture](./docs/architecture.md)** | システム全体の構成・コンポーネント・処理フロー |
-| **[Security Model](./docs/security.md)** | 3層防壁・Protection Engine・機密情報検出 |
-| **[Policy Guide](./docs/policy-guide.md)** | Tool Policy / File Policy の仕組みと設定方法 |
-| **[Agent Loop](./docs/agent-loop.md)** | エージェントループ・承認ワークフロー・自動リカバリ |
-| **[Tools](./docs/tools.md)** | ビルトインツール一覧・プラグイン開発ガイド |
-| **[MCP Integration](./docs/mcp-guide.md)** | MCPサーバー接続・設定・管理 |
-| **[Admin Guide](./docs/admin-guide.md)** | 管理画面の全機能解説 |
-| **[Configuration](./docs/configuration.md)** | 全環境変数・設定リファレンス |
-| **[API Reference](./docs/api-reference.md)** | REST API 全エンドポイント |
-| **[Data Model](./docs/data-model.md)** | データベーススキーマ・ER図 |
+| **[Getting Started](./docs/en/getting-started.md)** | Installation, initial setup, first chat |
+| **[Architecture](./docs/en/architecture.md)** | System structure, components, processing flow |
+| **[Security Model](./docs/en/security.md)** | 3-layer defense, Protection Engine, sensitive info detection |
+| **[Policy Guide](./docs/en/policy-guide.md)** | How Tool Policy / File Policy work and how to configure them |
+| **[Agent Loop](./docs/en/agent-loop.md)** | Agent loop, approval workflow, auto recovery |
+| **[Tools](./docs/en/tools.md)** | Built-in tool list, plugin development guide |
+| **[MCP Integration](./docs/en/mcp-guide.md)** | MCP server connection, configuration, management |
+| **[Admin Guide](./docs/en/admin-guide.md)** | Complete guide to the admin console |
+| **[Configuration](./docs/en/configuration.md)** | All environment variables and settings reference |
+| **[API Reference](./docs/en/api-reference.md)** | All REST API endpoints |
+| **[Data Model](./docs/en/data-model.md)** | Database schema and ER diagrams |
 
 ---
 
-## 技術スタック
+## Tech Stack
 
-| 項目 | 技術 |
+| Component | Technology |
 |---|---|
 | Runtime | Node.js |
 | Database | SQLite (better-sqlite3, WAL mode) |
@@ -345,15 +347,14 @@ npm run dev:full
 
 ---
 
-## ライセンス
+## License
 
 [MIT License](./LICENSE) — Copyright (c) 2024-2026 microHarnessEngine contributors
 
 
 
+This project is maintained on a best-effort basis.
 
-本プロジェクトは、可能な範囲でメンテナンスを行っています。
-
-- Issue は受け付けていますが、すべてに返信・対応できるとは限りません。
-- Pull Request は歓迎しますが、内容によっては取り込まれない場合があります。
-- 大きな変更を行う場合は、実装前にご相談ください。
+- Issues are welcome, but we may not be able to respond to or address all of them.
+- Pull Requests are welcome, but may not always be accepted.
+- For large changes, please discuss before implementing.

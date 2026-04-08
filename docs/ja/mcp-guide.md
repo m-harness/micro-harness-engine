@@ -1,3 +1,5 @@
+[English](../en/mcp-guide.md) | 日本語
+
 # MCP Integration
 
 Model Context Protocol (MCP) サーバーとの連携方法です。

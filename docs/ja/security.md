@@ -1,3 +1,5 @@
+[English](../en/security.md) | 日本語
+
 # Security Model
 
 microHarnessEngineのセキュリティ設計の全体像です。

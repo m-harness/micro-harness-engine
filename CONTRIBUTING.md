@@ -1,38 +1,40 @@
+English | [日本語](./CONTRIBUTING.ja.md)
+
 # Contributing
 
-micro-harness-engine への貢献をありがとうございます。
+Thank you for your interest in contributing to micro-harness-engine.
 
-本プロジェクトは、可能な範囲でメンテナンスを行っています。
-そのため、Issue や Pull Request は歓迎しますが、返信・対応・採用をお約束するものではありません。
+This project is maintained on a best-effort basis.
+As such, Issues and Pull Requests are welcome, but we cannot guarantee responses, resolution, or acceptance.
 
-## Issue について
+## Issues
 
-バグ報告、改善提案、ドキュメント修正の提案などは歓迎します。
+Bug reports, improvement suggestions, and documentation fixes are welcome.
 
-ただし、すべての Issue に返信・対応できるとは限りません。
-内容によっては、メンテナの判断でクローズする場合があります。
+However, we may not be able to respond to or address all Issues.
+Issues may be closed at the maintainer's discretion.
 
-## Pull Request について
+## Pull Requests
 
-Pull Request は歓迎します。
-ただし、採用可否はメンテナの判断となります。
+Pull Requests are welcome.
+However, acceptance is at the maintainer's discretion.
 
-小さく明確な変更は取り込みやすいです。
-一方で、大きな機能追加や設計変更を伴う提案は、実装前に Issue などで相談してください。
+Small, well-defined changes are easier to merge.
+For large feature additions or design changes, please discuss in an Issue first before implementing.
 
-## 大きな変更について
+## Large Changes
 
-以下のような変更は、事前相談を推奨します。
+We recommend prior discussion for changes such as:
 
-- 新しい大規模機能の追加
-- API や仕様の変更
-- ディレクトリ構成の大幅な変更
-- 依存ライブラリの大きな追加
+- Adding major new features
+- Changing APIs or specifications
+- Significant changes to directory structure
+- Adding large dependencies
 
-## コントリビューション時のお願い
+## Guidelines for Contributors
 
-- 変更理由がわかるようにしてください
-- 変更範囲はできるだけ小さくしてください
-- 既存の設計方針や命名方針を尊重してください
+- Make the reason for the change clear
+- Keep the scope of changes as small as possible
+- Respect existing design and naming conventions
 
-よろしくお願いいたします。
+Thank you for your contributions.

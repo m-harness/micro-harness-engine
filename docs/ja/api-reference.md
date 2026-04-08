@@ -1,3 +1,5 @@
+[English](../en/api-reference.md) | 日本語
+
 # API Reference
 
 microHarnessEngineの全REST APIエンドポイントです。
