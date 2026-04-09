@@ -1,44 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
-
-function escapeRegex(value) {
-	return value.replace(/[|\\{}()[\]^$+?.]/g, '\\$&')
-}
-
-function globToRegExp(pattern) {
-	let regex = '^'
-
-	for (let i = 0; i < pattern.length; i++) {
-		const char = pattern[i]
-		const next = pattern[i + 1]
-
-		if (char === '*') {
-			if (next === '*') {
-				const afterStars = pattern[i + 2]
-				if (afterStars === '/') {
-					regex += '(?:.*/)?'
-					i += 2
-				} else {
-					regex += '.*'
-					i += 1
-				}
-			} else {
-				regex += '[^/]*'
-			}
-			continue
-		}
-
-		if (char === '?') {
-			regex += '[^/]'
-			continue
-		}
-
-		regex += escapeRegex(char)
-	}
-
-	regex += '$'
-	return new RegExp(regex, 'i')
-}
+import picomatch from 'picomatch'
 
 function walkDir(dirPath, basePath, maxResults) {
 	const results = []
@@ -99,7 +61,7 @@ export const globTool = {
 		const { resolveProjectPath, filterDiscoverableEntries } = context.helpers
 		const target = resolveProjectPath(input.path || '.', { ...context, action: 'discover' })
 
-		const regex = globToRegExp(String(input.pattern))
+		const regex = picomatch.makeRe(String(input.pattern), { dot: true, nocase: true })
 		const walked = walkDir(target.absolutePath, target.absolutePath, MAX_MATCHES * 2)
 
 		const candidateEntries = walked

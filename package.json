@@ -20,7 +20,8 @@
 	"dependencies": {
 		"@anthropic-ai/sdk": "^0.54.0",
 		"better-sqlite3": "^11.10.0",
-		"dotenv": "^16.4.7"
+		"dotenv": "^16.4.7",
+		"picomatch": "^4.0.4"
 	},
 	"devDependencies": {
 		"concurrently": "^9.2.1",
