@@ -93,6 +93,18 @@ function validateToolNames(toolNames, catalog) {
 	}
 }
 
+/**
+ * MCPツール名のサニタイズ: Claude APIの名前規則 ^[a-zA-Z0-9_-]{1,128}$ に合わせる。
+ * "serverName__toolName" 形式の場合、サーバー名プレフィックスを保持したままツール名部分をサニタイズする。
+ */
+function sanitizeMcpToolName(name) {
+	const sep = name.indexOf('__')
+	if (sep === -1) return name
+	const prefix = name.slice(0, sep + 2)
+	const toolPart = name.slice(sep + 2)
+	return prefix + toolPart.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 128)
+}
+
 function normalizeToolNames(toolNames = []) {
 	if (!Array.isArray(toolNames)) {
 		throw new HttpError(400, 'tools must be an array.')
@@ -100,7 +112,7 @@ function normalizeToolNames(toolNames = []) {
 
 	return Array.from(new Set(
 		toolNames
-			.map(toolName => String(toolName || '').trim())
+			.map(toolName => sanitizeMcpToolName(String(toolName || '').trim()))
 			.filter(Boolean)
 	))
 }

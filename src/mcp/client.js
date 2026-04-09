@@ -22,6 +22,8 @@ export class McpClient {
 		this.tools = []
 		this.lastError = null
 		this._reconnectAttempts = 0
+		/** @type {Map<string, string>} sanitized tool name → original MCP tool name */
+		this._toolNameMap = new Map()
 	}
 
 	async start() {
@@ -116,15 +118,35 @@ export class McpClient {
 		this.tools = tools
 	}
 
+	/**
+	 * Sanitize a tool name to match Claude API pattern: ^[a-zA-Z0-9_-]{1,128}$
+	 * Replaces disallowed characters (e.g. dots) with underscores.
+	 */
+	_sanitizeToolName(name) {
+		return name.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 128)
+	}
+
+	/** Resolve a sanitized tool name back to the original MCP tool name */
+	getOriginalToolName(sanitizedName) {
+		return this._toolNameMap.get(sanitizedName) ?? sanitizedName
+	}
+
 	getToolDefinitions() {
 		if (this.state !== 'ready') {
 			return []
 		}
-		return this.tools.map(tool => ({
-			name: `${this.serverName}__${tool.name}`,
-			description: tool.description || '',
-			input_schema: tool.inputSchema || { type: 'object', properties: {}, required: [] }
-		}))
+		this._toolNameMap.clear()
+		return this.tools.map(tool => {
+			const sanitized = this._sanitizeToolName(tool.name)
+			if (sanitized !== tool.name) {
+				this._toolNameMap.set(sanitized, tool.name)
+			}
+			return {
+				name: `${this.serverName}__${sanitized}`,
+				description: tool.description || '',
+				input_schema: tool.inputSchema || { type: 'object', properties: {}, required: [] }
+			}
+		})
 	}
 
 	async callTool(toolName, args) {
