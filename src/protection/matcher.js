@@ -1,12 +1,9 @@
 import path from 'node:path'
-
-function escapeRegex(value) {
-	return value.replace(/[|\\{}()[\]^$+?.]/g, '\\$&')
-}
+import picomatch from 'picomatch'
 
 const GLOB_PATTERN_MAX_LENGTH = 500
 
-function globToRegExp(pattern) {
+function compileGlob(pattern) {
 	if (pattern.length > GLOB_PATTERN_MAX_LENGTH) {
 		throw new Error(`Glob pattern exceeds maximum length of ${GLOB_PATTERN_MAX_LENGTH} characters.`)
 	}
@@ -14,28 +11,7 @@ function globToRegExp(pattern) {
 		throw new Error('Glob patterns with 3 or more consecutive wildcards are not allowed.')
 	}
 
-	let regex = '^'
-
-	for (let index = 0; index < pattern.length; index += 1) {
-		const char = pattern[index]
-		const next = pattern[index + 1]
-
-		if (char === '*') {
-			if (next === '*') {
-				regex += '.*'
-				index += 1
-			} else {
-				regex += '[^/]*'
-			}
-
-			continue
-		}
-
-		regex += escapeRegex(char)
-	}
-
-	regex += '$'
-	return new RegExp(regex, 'i')
+	return picomatch.makeRe(pattern, { dot: true, nocase: true })
 }
 
 export function normalizeProtectionPath(targetPath = '.') {
@@ -80,7 +56,7 @@ export function matchesProtectionRule(rule, targetPath) {
 
 	if (rule.patternType === 'glob') {
 		try {
-			return globToRegExp(normalizedPattern).test(normalizedPath)
+			return compileGlob(normalizedPattern).test(normalizedPath)
 		} catch {
 			return false
 		}
