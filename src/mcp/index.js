@@ -106,7 +106,7 @@ export class McpManager {
 		}
 
 		const serverName = namespacedName.slice(0, separatorIndex)
-		const toolName = namespacedName.slice(separatorIndex + 2)
+		const sanitizedToolName = namespacedName.slice(separatorIndex + 2)
 		const client = this.clients.get(serverName)
 
 		if (!client) {
@@ -118,7 +118,9 @@ export class McpManager {
 		}
 
 		try {
-			const mcpResult = await client.callTool(toolName, input)
+			// サニタイズされた名前を元のMCPツール名に戻す
+			const originalToolName = client.getOriginalToolName(sanitizedToolName)
+			const mcpResult = await client.callTool(originalToolName, input)
 			return this._normalizeToolResult(mcpResult)
 		} catch (error) {
 			return { ok: false, error: error.message }
@@ -175,8 +177,9 @@ export class McpManager {
 		for (const client of this.clients.values()) {
 			if (client.state === 'ready') {
 				for (const tool of client.tools) {
+					const sanitized = client._sanitizeToolName(tool.name)
 					tools.push({
-						name: `${client.serverName}__${tool.name}`,
+						name: `${client.serverName}__${sanitized}`,
 						description: tool.description || '',
 						inputSchema: tool.inputSchema || { type: 'object', properties: {}, required: [] },
 						riskLevel: 'safe',

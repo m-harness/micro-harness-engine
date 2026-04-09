@@ -223,7 +223,7 @@ export class MicroHarnessEngineApp {
 		this.toolRegistry = null
 		this.mcpManager = new McpManager()
 		this.mcpManager.onServerReady = () => {
-			this.policyService.syncSystemPolicies()
+			this.policyService?.syncSystemPolicies()
 		}
 		this.policyService = null
 		this.skillRegistry = createSkillRegistry()
@@ -260,6 +260,10 @@ export class MicroHarnessEngineApp {
 	}
 
 	startMcp() {
+		// MCPサーバーがreadyになったらポリシーを再同期してツールを許可リストに追加
+		this.mcpManager.onServerReady = () => {
+			this.policyService.syncSystemPolicies()
+		}
 		this.mcpManager.start()
 		this.policyService.syncSystemPolicies()
 	}
