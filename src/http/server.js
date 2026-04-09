@@ -1006,6 +1006,11 @@ export async function startApiServer({
 		const address = server.address()
 		const actualPort = typeof address === 'object' && address ? address.port : port
 		console.log(`microHarnessEngine API listening on http://localhost:${actualPort}`)
+		if (process.env.MHE_DEV) {
+			console.log(`  Web UI (dev): http://localhost:4173`)
+		} else {
+			console.log(`  Web UI: http://localhost:${actualPort}`)
+		}
 		app.recoverInterruptedRuns().catch(error => {
 			console.error('Startup recovery failed:', error?.message || error)
 		})
