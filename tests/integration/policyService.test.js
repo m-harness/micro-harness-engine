@@ -150,6 +150,71 @@ describe('PolicyService', () => {
 				policyService.deleteToolPolicy(allToolsPolicy.id)
 			}).toThrow(/400|System/i)
 		})
+
+		it('rejects creating policy with unknown tools', () => {
+			expect(() => {
+				policyService.createToolPolicy({
+					name: 'Bad Create',
+					tools: ['read_file', 'nonexistent_tool']
+				})
+			}).toThrow(/400|Unknown/i)
+		})
+
+		it('preserves orphaned tools on update (no validation error)', () => {
+			const policy = policyService.createToolPolicy({
+				name: 'Orphan Test',
+				tools: ['read_file']
+			})
+			// Simulate orphaned tool by directly inserting into DB
+			storeFns.replaceToolPolicyTools(policy.id, ['read_file', 'deleted-mcp__search'])
+
+			// Update with the same tools — orphaned tool should be kept, not rejected
+			const updated = policyService.updateToolPolicyRecord(policy.id, {
+				name: 'Orphan Test Updated',
+				tools: ['read_file', 'deleted-mcp__search']
+			})
+			expect(updated.tools).toContain('read_file')
+			expect(updated.tools).toContain('deleted-mcp__search')
+		})
+
+		it('removes only unchecked orphaned tools on update', () => {
+			const policy = policyService.createToolPolicy({
+				name: 'Orphan Partial',
+				tools: ['read_file']
+			})
+			storeFns.replaceToolPolicyTools(policy.id, [
+				'read_file', 'deleted-mcp__tool_a', 'deleted-mcp__tool_b'
+			])
+
+			// User unchecks tool_b but keeps tool_a
+			const updated = policyService.updateToolPolicyRecord(policy.id, {
+				tools: ['read_file', 'deleted-mcp__tool_a']
+			})
+			expect(updated.tools).toContain('read_file')
+			expect(updated.tools).toContain('deleted-mcp__tool_a')
+			expect(updated.tools).not.toContain('deleted-mcp__tool_b')
+		})
+
+		it('orphaned tools are excluded from listAllowedToolDefinitions', () => {
+			const policy = policyService.createToolPolicy({
+				name: 'Orphan Runtime',
+				tools: ['read_file']
+			})
+			storeFns.replaceToolPolicyTools(policy.id, ['read_file', 'deleted-mcp__ghost'])
+			const user = authService.createLocalUser({
+				loginName: 'orphanuser',
+				password: 'LongPassword12!',
+				displayName: 'Orphan User'
+			})
+			policyService.assignPoliciesToUser(user.id, {
+				toolPolicyId: policy.id,
+				filePolicyId: storeFns.getDefaultFilePolicy().id
+			})
+
+			const defs = policyService.listAllowedToolDefinitions(user.id, TOOL_CATALOG)
+			expect(defs).toHaveLength(1)
+			expect(defs[0].name).toBe('read_file')
+		})
 	})
 
 	describe('File Policy CRUD', () => {

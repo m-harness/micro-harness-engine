@@ -13,67 +13,137 @@ English | [日本語](../ja/ui-functional-spec.md)
 
 | Screen | Path | Authentication | Purpose |
 |--------|------|----------------|---------|
-| **User Workspace** | `/` | User session (`microharnessengine_session` cookie) | Chat, approvals, automations, API token management |
-| **Admin Console** | `/admin` | Admin session (`microharnessengine_admin_session` cookie) | User provisioning, policy management, operational monitoring |
+| **User Workspace** | `/`, `/c/:conversationId` | User session (`microharnessengine_session` cookie) | Chat, approvals, automations, API token management |
+| **Admin Console** | `/admin/*` | Admin session (`microharnessengine_admin_session` cookie) | User provisioning, policy management, operational monitoring |
 
-- Routing is determined by `window.location.pathname` (react-router-dom is not used)
-- When on `/admin`, the `AdminConsole` component is rendered entirely
-- Otherwise, the `App` component (User Workspace) is rendered
+- Routing uses `react-router-dom` v6 (`BrowserRouter` + `lazy()` + `Suspense`)
+- All pages are code-split (`lazy()` imports)
 
 ### 1.2 Entry Point
 
 ```
-main.jsx → <App />
-  ├─ pathname is /admin → <AdminConsole />
-  └─ otherwise → Workspace UI
+main.jsx -> <BrowserRouter>
+  +-- <JotaiProvider>
+       +-- <Toaster richColors position="top-right" />  (sonner)
+            +-- <App />  (route definitions)
 ```
+
+### 1.3 Route Table
+
+| Path | Component | Auth Guard | Layout |
+|------|-----------|------------|--------|
+| `/login` | `LoginPage` | None | None |
+| `/admin/login` | `AdminLoginPage` | None | None |
+| `/` (index) | `WorkspacePage` | `ProtectedRoute type="user"` | `WorkspaceLayout` |
+| `/c/:conversationId` | `WorkspacePage` | `ProtectedRoute type="user"` | `WorkspaceLayout` |
+| `/admin` (index) | `OverviewPage` | `ProtectedRoute type="admin"` | `AdminLayout` |
+| `/admin/users` | `UsersPage` | `ProtectedRoute type="admin"` | `AdminLayout` |
+| `/admin/tool-policies` | `ToolPoliciesPage` | `ProtectedRoute type="admin"` | `AdminLayout` |
+| `/admin/file-policies` | `FilePoliciesPage` | `ProtectedRoute type="admin"` | `AdminLayout` |
+| `/admin/protection-rules` | `ProtectionRulesPage` | `ProtectedRoute type="admin"` | `AdminLayout` |
+| `/admin/approvals` | `ApprovalsPage` | `ProtectedRoute type="admin"` | `AdminLayout` |
+| `/admin/automations` | `AutomationsPage` | `ProtectedRoute type="admin"` | `AdminLayout` |
+| `/admin/tools` | `ToolsPage` | `ProtectedRoute type="admin"` | `AdminLayout` |
+| `/admin/skills` | `SkillsPage` | `ProtectedRoute type="admin"` | `AdminLayout` |
+| `/admin/mcp-servers` | `McpServersPage` | `ProtectedRoute type="admin"` | `AdminLayout` |
+| `*` (catch-all) | `Navigate to="/"` | None | None |
+
+`ProtectedRoute`: On mount, calls `api.getAuthState()` (user) / `api.getAdminAuthState()` (admin). Redirects to `/login` or `/admin/login` if unauthenticated.
+
+### 1.4 Navigation from Non-React Code
+
+`navigateRef.js` captures `useNavigate()` / `useLocation()` into a module-level ref, allowing the axios interceptor (e.g., 401 redirect) to call them.
 
 ---
 
 ## 2. Common Patterns
 
-### 2.1 State Management
+### 2.1 State Management (jotai)
 
-- **No external libraries**: Everything uses only `useState`
-- **No global store**: All state is held within components
-- Form values are also individually managed with `useState` (no form libraries used)
+Global state is managed with jotai atoms. All atoms are plain `atom()` primitives.
 
-### 2.2 API Communication Layer (`lib/api.js`)
+#### workspace.js
 
-```
-request(path, { method, body, csrfToken, headers })
-```
+| Atom | Default Value | Purpose |
+|------|---------------|---------|
+| `workspaceAtom` | `{ conversations: [], apiTokens: [] }` | Bootstrap data |
+| `selectedConversationIdAtom` | `null` | Currently selected conversation ID |
+| `conversationViewAtom` | `null` | Selected conversation detail (messages, approvals, automations, activeRun, lastFailedRun) |
+| `streamingMessageAtom` | `null` | SSE streaming text accumulation `{ text, runId }` |
 
-- Uses `fetch` with `credentials: 'include'` (automatic cookie sending)
-- Mutations (POST/PATCH/DELETE) include the `x-csrf-token` header
-- Responses are in `{ ok: true, data: {...} }` format, returning `data`
-- On error: `throw new Error(payload.error)` → caught by `runAction` at the call site
+#### ui.js
 
-### 2.3 Loading Management (`busyKey` Pattern)
+| Atom | Default Value | Purpose |
+|------|---------------|---------|
+| `themeAtom` | `localStorage 'mhe-theme'` or `'light'` | Dark/light theme |
+| `workspaceBusyKeyAtom` | `''` | Workspace loading state |
+| `adminBusyKeyAtom` | `''` | Admin panel loading state |
+
+#### auth.js
+
+| Atom | Default Value | Purpose |
+|------|---------------|---------|
+| `authStateAtom` | `{ user: null, csrfToken: '', bootstrapRequired: false, webBootstrapEnabled: false }` | User auth state |
+| `adminAuthStateAtom` | `{ adminAuthenticated: false, csrfToken: '', adminEnabled: false, user: null }` | Admin auth state |
+
+#### admin.js
+
+| Atom | Default Value | Purpose |
+|------|---------------|---------|
+| `adminDataAtom` | `null` | Admin bootstrap data |
+
+### 2.2 API Communication Layer
+
+#### REST (lib/api.js + lib/axios.js)
+
+- `axios` instance with `withCredentials: true`
+- Request interceptor: adds `x-csrf-token` header on non-GET requests (separate tokens for user/admin)
+- Response interceptor: unwraps `{ ok, data, error }` envelope, returns `data`. On 401, redirects to login via `navigateRef`
+- On error: `throw new Error(payload.error)` -> caught by `runAction`
+
+#### SSE (lib/sse.js)
+
+`createSSEConnection(url, { onEvent, onError, onClose })` --- A custom implementation using `fetch()` + `ReadableStream` rather than the native `EventSource` API:
+
+- `credentials: 'include'` for cookie authentication
+- `Accept: 'text/event-stream'` header
+- Response body read chunk-by-chunk via `getReader()`
+- Event boundaries split on `\n\n`, parsing `event:` / `data:` lines
+- Comment lines starting with `:` (heartbeats) are ignored
+- `data` is parsed with `JSON.parse()`; falls back to raw string on failure
+- Callbacks: `onEvent({ type, data })`, `onError(err)`, `onClose()`
+- Returns: `{ close() }` --- disconnects via `AbortController.abort()`
+- `AbortError` is silently ignored as an intentional close
+
+### 2.3 Loading Management (`workspaceBusyKeyAtom` + `runAction` Pattern)
 
 ```javascript
-const [busyKey, setBusyKey] = useState('')
-
-async function runAction(key, callback) {
-  setBusyKey(key)
-  try { await callback() }
-  catch (error) { showFlash(error.message, 'error') }
-  finally { setBusyKey('') }
-}
+const runAction = useCallback(async (key, callback) => {
+    setBusyKey(key)        // set workspaceBusyKeyAtom
+    try {
+        await callback()
+    } catch (error) {
+        toast.error(error.message)   // sonner toast
+    } finally {
+        setBusyKey('')     // clear
+    }
+}, [setBusyKey])
 ```
 
 - Each button uses `disabled={busyKey === 'key-name'}` to prevent double submission
 - Button labels switch to "Sending..." etc. based on `busyKey`
 
-### 2.4 Flash Messages (Toast Notifications)
+**Keys used**: `'create-conversation'`, `'select-<id>'`, `'send-message'`, `'cancel-run'`, `'approval-<id>'`, `'create-automation'`, `'automation-<id>'`, `'run-<id>'`, `'delete-<id>'`, `'create-token'`, `'revoke-<id>'`
 
-```javascript
-const [flash, setFlash] = useState(null) // { message, kind }
-```
+The admin panel uses the same pattern with `adminBusyKeyAtom`.
 
-- `kind`: `'info'` (teal-based) / `'error'` (rose-based)
-- Auto-cleared after 4200ms (`useEffect` + `setTimeout`)
-- Displayed at the top of the screen
+### 2.4 Flash Messages (sonner toast)
+
+Uses the `toast` function from the `sonner` library:
+
+- `toast.error(message)` --- error notification (`runAction` catch, login failure, etc.)
+- `toast.success(message)` --- success notification (login success, etc.)
+- Configuration: `<Toaster richColors position="top-right" />`
 
 ### 2.5 Date Formatting
 
@@ -86,7 +156,7 @@ new Intl.DateTimeFormat('ja-JP', {
 
 - Displays `'Not yet'` when value is absent
 
-### 2.6 Status Badge (`Pill` Component)
+### 2.6 Status Badge (`StatusBadge` Component)
 
 Status string to color mapping:
 
@@ -96,6 +166,7 @@ Status string to color mapping:
 | `queued`, `running`, `waiting_approval`, `pending` | amber (yellow) |
 | `recovering` | orange |
 | `paused` | slate (gray) |
+| `cancelled` | slate (gray) |
 | `denied`, `failed`, `disabled`, `deleted` | rose (red) |
 | Other | slate (gray) default |
 
@@ -104,41 +175,60 @@ Status string to color mapping:
 - Deletion operations use `window.confirm()` for confirmation (not custom modals)
 - Only policy deletion uses `DeletePolicyDialog` (custom modal)
 
-### 2.8 i18n (Internationalization)
+### 2.8 Animations (framer-motion)
+
+Presets defined in `lib/motion.js`:
+- `fadeInUp`, `fadeIn`, `scaleIn`, `stagger(index)`
+- Respects `prefers-reduced-motion`
+
+### 2.9 i18n (Internationalization)
 
 - `i18n/translations.js` contains `en` / `ja` translation dictionaries
 - `i18n/context.jsx` contains `I18nProvider` + `useI18n` hook
 - Locale is saved in `localStorage` (`microharnessengine-admin-web.locale`)
 - Browser language is auto-detected
-- **Note**: The current App.jsx/AdminConsole.jsx uses English text directly, and the i18n context is not in use
+- **Note**: The current pages use English text directly, and the i18n context is not in use
 
 ---
 
-## 3. User Workspace (`App.jsx`)
+## 3. User Workspace
 
-### 3.1 Lifecycle
+### 3.1 Workspace Lifecycle
 
 ```
 Mount
-  └─ hydrate()
-       ├─ api.getAuthState() → update authState
-       ├─ user exists → loadWorkspace()
-       │    ├─ api.getBootstrap() → conversations, apiTokens
-       │    └─ loadConversation(id) → conversationView
-       └─ no user → display login screen
+  +-- loadWorkspace(preferredConversationId?)
+       |-- api.getBootstrap() -> workspaceAtom, authStateAtom updated
+       +-- loadConversation(id, conversations)
+            +-- api.getConversation() -> conversationViewAtom updated
 
-After authentication, loadWorkspace() is polled every 4000ms
+Real-time updates (primary: SSE)
+  |-- On SSE connection success:
+  |    +-- createSSEConnection(/api/conversations/:id/stream)
+  |         |-- delta -> accumulate text in streamingMessageAtom
+  |         |-- run.completed / run.cancelled / run.failed
+  |         |    -> clear streamingMessageAtom + loadWorkspace()
+  |         +-- approval.requested -> loadWorkspace()
+  |
+  +-- On SSE error (fallback: polling):
+       +-- Call loadWorkspace() every 4000ms
 ```
+
+**SSE connection management**:
+- `useSSE` is local React state (`useState(true)`)
+- Set to `false` on SSE error, falling back to polling
+- SSE reconnection is not performed automatically (until component remount)
+- SSE is reconnected on conversation switch (`selectedConversationId` is in the `useEffect` dependency array)
 
 ### 3.2 Screen Transitions
 
 ```
-[Initializing] → Display "Loading workspace..."
-[Unauthenticated] → Login screen
-[Authenticated] → Workspace (3-column layout)
+[Initializing] -> Display "Authenticating..." (ProtectedRoute)
+[Unauthenticated] -> Redirect to /login
+[Authenticated] -> WorkspaceLayout + WorkspacePage
 ```
 
-### 3.3 Login Screen
+### 3.3 Login Screen (`LoginPage`)
 
 **Layout**: 2-column grid (lg and above)
 
@@ -154,7 +244,8 @@ After authentication, loadWorkspace() is polled every 4000ms
 **Sign-in Form**:
 - Fields: `loginName` (text), `password` (password)
 - Button: "Sign in" (while loading: "Signing in...")
-- Submit: `api.login(loginForm)` → `hydrate()`
+- Submit: `api.login(loginForm)` -> navigate to workspace
+- Error: `toast.error(error.message)`
 
 **Admin Info Card**:
 - Title: "Admin-managed accounts"
@@ -162,26 +253,21 @@ After authentication, loadWorkspace() is polled every 4000ms
 
 ### 3.4 Workspace Screen
 
-**Overall Layout**: Header + 3-column grid (`xl:grid-cols-[300px_minmax(0,1fr)_360px]`)
+**Overall Layout**: `WorkspaceLayout` (header + sidebar + main content)
 
 #### 3.4.1 Header
 
 - Brand label: "microHarnessEngine Workspace"
 - User display name, @loginName, role
-- Status Pill: activeRun status or "ready"
+- Status Badge: activeRun status or "ready"
 - Buttons: "New conversation", "Log out"
 
-#### 3.4.2 Left Column: Session List
-
-**Card Title**: "Sessions"
+#### 3.4.2 Left Column: Conversation Sidebar (`ConversationSidebar`)
 
 **When 0 conversations**: `EmptyState` component
-- Title: "No conversations yet"
-- Action button: "Start first chat"
 
-**Conversation List**: Each conversation is a button element
-- Selected: primary color background + white text + shadow
-- Unselected: white background + hover effect
+**Conversation List**: Each conversation is a card element
+- Selected: highlighted display
 - Displayed information:
   - `title`
   - `source` (web/slack/discord)
@@ -189,34 +275,54 @@ After authentication, loadWorkspace() is polled every 4000ms
   - Last message timestamp (`lastMessageAt` or `createdAt`)
   - Active run status (`activeRunStatus`)
 
-**Behavior**: Click triggers `handleSelectConversation(id)` → `loadConversation(id)`
+**Behavior**: Click triggers `selectConversation(id)` -> URL navigation (`/c/:id`) + conversation load
 
 #### 3.4.3 Center Column: Message Thread
 
-**Card Header**:
-- Title: selected conversation's title or "Conversation"
-- Description: source + creation date, or guidance when nothing is selected
+##### Message List (`MessageList`)
 
-**Message Display Area** (scrollable):
+- Directly references `streamingMessageAtom`
+- Auto-scroll: scrolls to bottom on new messages and streaming text changes (`SCROLL_THRESHOLD = 50` detects user scroll-up)
 - No conversation selected: `EmptyState` "No session selected"
 - 0 messages: `EmptyState` "This conversation is ready"
-- Message list:
-  - `role === 'user'`: right-aligned, primary color background, white text, only bottom-right corner has small border-radius
-  - `role === 'assistant'`: left-aligned, white background + border, only bottom-left corner has small border-radius
-  - `role === 'tool'`: center-aligned, dashed amber border, mono font
-  - Each message has: label ("You"/"Agent"), contentText, createdAt
+- During streaming: displays `StreamingBubble` at the bottom
 
-**Input Area** (separated by border-t):
-- Active run display: status Pill + phase
-- Failed run error: "Last run failed: {error}"
-- Textarea: min-height 8rem
-- Send button: "Send message" (while loading: "Sending...")
-- Supplementary text: "Approvals and automation replies return to the same linked chat surface."
+##### Message Bubble (`MessageBubble`)
+
+| Role | Display |
+|------|---------|
+| `user` | Right-aligned, primary color background, white text |
+| `assistant` | Left-aligned, card background, Markdown rendering via `react-markdown` + `remark-gfm` |
+| `tool` | Center-aligned, dashed border, collapsible (`AnimatePresence`) |
+
+- `framer-motion` for fade + slide-up entrance animation
+
+##### Streaming Bubble (`StreamingBubble`)
+
+- Same visual as assistant bubble
+- Pulsing cursor (`animate-pulse bg-foreground/60`)
+- Real-time Markdown rendering of streaming text
+
+##### Tool Message (`ToolMessage`)
+
+- Collapsible panel
+- Tool name extracted via regex (`/^\[Tool\]\s+(\S+?)\(/`)
+- `ChevronDown`/`ChevronUp` (lucide-react) icons
+- framer-motion expand/collapse animation
+
+##### Chat Input (`ChatInput`)
+
+- Uses `useWorkspace()` for `sendMessage`, `cancelRun`, `busyKey`
+- Form submit + `Ctrl/Cmd+Enter` shortcut
+- `Escape` key to cancel active Run
+- Active Run display: `StatusBadge` + phase info + spinner + stop button
+- Failed Run error display: destructive-colored banner
+- Send button: disabled while `isSending` or empty text
 
 **Send Behavior**:
-1. If `messageDraft.trim()` is empty, do nothing
+1. If text is empty, do nothing
 2. If no `selectedConversationId`, create a new conversation
-3. `api.postConversationMessage()` → `setMessageDraft('')` → `loadWorkspace()`
+3. `sendMessage(text)` -> clear text
 
 #### 3.4.4 Right Column: Sidebar (3 Cards)
 
@@ -228,11 +334,11 @@ After authentication, loadWorkspace() is polled every 4000ms
 **When 0 approvals**: Text "No pending approvals in this session."
 
 **Approval List**: Each approval item
-- Status Pill + tool name (uppercase)
+- Status Badge + tool name (uppercase)
 - Reason text (`reason`)
 - Tool input JSON preview (`JSON.stringify(toolInput, null, 2)`)
 - Buttons: "Approve", "Deny"
-- Behavior: `api.decideApproval(id, { decision })` → `loadWorkspace()`
+- Behavior: `handleApproval(id, decision)` -> `loadWorkspace()`
 
 ##### (B) Automations Card
 
@@ -240,27 +346,27 @@ After authentication, loadWorkspace() is polled every 4000ms
 
 **Creation Form** (always visible):
 - `name` (Input, placeholder: "Automation name")
-- `instruction` (Textarea, min-height 7rem, placeholder: "What should this automation do?")
+- `instruction` (Textarea, placeholder: "What should this automation do?")
 - `intervalMinutes` (Input type=number, min=5, placeholder: "60")
 - Button: "Create"
-- Behavior: `api.createAutomation()` → clear form → `loadWorkspace()`
-- Prerequisite: flash error if no conversation is selected
+- Behavior: `createAutomation()` -> clear form -> `loadWorkspace()`
+- Prerequisite: `toast.error()` if no conversation is selected
 
 **Automation List**: Each item
 - Name + interval display (`formatInterval`)
-- Status Pill
+- Status Badge
 - Instruction text (`instruction`, whitespace-pre-wrap)
 - Next run time
 - Button group:
-  - "Run now": `api.runAutomationNow()`
-  - "Pause"/"Resume": `api.updateAutomationStatus()` (pause if active, activate if paused)
-  - "Delete": `window.confirm()` → `api.deleteAutomation()`
+  - "Run now": `runAutomationNow()`
+  - "Pause"/"Resume": `updateAutomationStatus()` (pause if active, activate if paused)
+  - "Delete": `window.confirm()` -> `deleteAutomation()`
 
 **Interval Display Rules**:
-- None → "Manual"
-- Less than 60 → "Every {n} min"
-- Divisible by 60 → "Every {n} hr"
-- Other → "Every {n} min"
+- None -> "Manual"
+- Less than 60 -> "Every {n} min"
+- Divisible by 60 -> "Every {n} hr"
+- Other -> "Every {n} min"
 
 ##### (C) API Access Card
 
@@ -272,41 +378,40 @@ After authentication, loadWorkspace() is polled every 4000ms
 **Creation Form**:
 - `newTokenName` (Input, initial value: "Primary integration token")
 - Button: "Create"
-- Behavior: `api.createToken()` → `setRevealedToken(token)` → `loadWorkspace()`
+- Behavior: `createToken(name)` -> display token -> `loadWorkspace()`
 
 **Token List**: Each token
 - Name, creation time, last used time
-- Button: "Revoke" (`window.confirm()` → `api.revokeToken()`)
+- Button: "Revoke" (`window.confirm()` -> `revokeToken()`)
 
 **When 0 tokens**: Text "No personal access tokens yet."
 
 ### 3.5 Logout Behavior
 
 1. `api.logout()`
-2. Clear `revealedToken`
-3. Clear `messageDraft`
-4. Reset state with `hydrate()`
+2. Reset state
+3. Redirect to `/login`
 
 ---
 
-## 4. Admin Console (`AdminConsole.jsx`)
+## 4. Admin Console
 
 ### 4.1 Lifecycle
 
 ```
 Mount
-  └─ loadAdmin()
-       ├─ api.getAdminAuthState() → authState
-       ├─ unauthenticated → data = null
-       └─ authenticated → api.getAdminBootstrap() → data
+  +-- ProtectedRoute -> api.getAdminAuthState()
+       |-- unauthenticated -> redirect to /admin/login
+       +-- authenticated -> AdminLayout + page component
+            +-- loadAdmin() -> api.getAdminBootstrap() -> adminDataAtom
 ```
 
-- No polling like the User Workspace (manual refresh only)
+- No polling (manual refresh only)
 - `loadAdmin()` re-fetches data after every mutation
 
-### 4.2 Authentication Screen
+### 4.2 Authentication Screen (`AdminLoginPage`)
 
-**Layout**: Center-aligned (`max-w-3xl`) card
+**Layout**: Center-aligned card
 
 **Card Contents**:
 - Title: "Admin Console"
@@ -316,34 +421,30 @@ Mount
   - `loginName` (initial value: "root")
   - `password`
   - Button: "Enter admin console" (disabled if `adminEnabled` is false)
-- Behavior: `api.adminLogin()` → clear password → `loadAdmin()`
+- Behavior: `api.adminLogin()` -> clear password -> redirect to `/admin`
+- Error: `toast.error(error.message)`
 
-### 4.3 Main Screen
+### 4.3 Main Screen (`AdminLayout`)
 
-**Overall Layout**: Header + tab content
+**Overall Layout**: Sidebar navigation + main content (each page)
 
-#### Header
+#### Sidebar
 - Label: "Admin Plane"
-- Title: "Policy and Operations Console"
-- Description text
 - Logged-in user display: "@{loginName}"
 - Logout button
-- Tab navigation (`SectionTabs`)
+- Navigation links (react-router-dom `NavLink`)
 
-#### Tab List
+#### Page List
 
 ```
-overview | users | tool-policies | file-policies | protection-rules |
-approvals | automations | tools | skills | mcp-servers
+/admin (overview) | /admin/users | /admin/tool-policies | /admin/file-policies |
+/admin/protection-rules | /admin/approvals | /admin/automations |
+/admin/tools | /admin/skills | /admin/mcp-servers
 ```
-
-- Each tab is a button element, displayed capitalized
-- Selected: dark background (`#17332f`) + light text
-- Unselected: white-based background + hover effect
 
 ### 4.4 Overview Tab
 
-**Layout**: Grid (`md:grid-cols-2 xl:grid-cols-3`)
+**Layout**: Grid
 
 **Stat Cards** (7 cards):
 | Label | Data Source |
@@ -360,307 +461,144 @@ Each card displays `0` when the value is absent.
 
 ### 4.5 Users Tab
 
-**Layout**: 2-column grid (`xl:grid-cols-[1.1fr_0.9fr]`)
+**Layout**: 2-column grid
 
 #### Left: User List
 
-**Title**: "Users"
-
 **Each User Card**:
 - Display name + @loginName
-- Status Pill group: status, role, authSource, ("protected root" if root)
-- Tool policy selector (`<select>`): changes are applied immediately → `api.adminAssignPolicies()`
-- File policy selector (`<select>`): changes are applied immediately → `api.adminAssignPolicies()`
+- Status Badge group: status, role, authSource, ("protected root" if root)
+- Tool policy selector (`<select>`): changes are applied immediately -> `api.adminAssignPolicies()`
+- File policy selector (`<select>`): changes are applied immediately -> `api.adminAssignPolicies()`
 - Password change row: Input + "Set password" button
   - Disabled for root user (placeholder: "Managed by ADMIN_RUNTIME_PASSWORD")
 - Status toggle button: "Disable"/"Enable"
   - Disabled for root user
 - Delete button: "Delete"
   - Disabled for root or remote accounts
-  - `window.confirm()` → `api.adminDeleteUser()`
-- Root user description text
-- Remote account description text
-
-**Immediate Policy Change Reflection**:
-- Directly calls `api.adminAssignPolicies()` on select's `onChange`
-- The other policy ID retains its current value
+  - `window.confirm()` -> `api.adminDeleteUser()`
 
 #### Right: User Creation Form
 
-**Title**: "Create user"
-
-- `loginName` (Input, placeholder: "login name")
-- `displayName` (Input, placeholder: "display name")
-- `password` (Input type=password, placeholder: "initial password")
-- `role` (select: "user" / "admin")
+- `loginName`, `displayName`, `password`, `role` (select: "user" / "admin")
 - Button: "Create user"
-- Behavior: `api.adminCreateUser()` → clear form → `loadAdmin()`
+- Behavior: `api.adminCreateUser()` -> clear form -> `loadAdmin()`
 
 ### 4.6 Tool Policies Tab
 
-**Layout**: 2-column grid (`xl:grid-cols-[1.05fr_0.95fr]`)
+**Layout**: 2-column grid
 
 #### Left: Policy List
 
-**Title**: "Tool policies"
-
 **Each Policy Card**:
 - Name + description
-- Pill: "system" or "custom"
+- Badge: "system" or "custom"
 - Custom only: "Edit" button, "Delete" button
-- Tool list: each tool name + RiskPill (inline)
+- Tool list: each tool name + RiskBadge (inline)
 
 **Edit**: Opens the tool policy edit modal
 **Delete**: Opens `DeletePolicyDialog` (with replacement policy selection)
 
 #### Right: Policy Creation Form
 
-**Title**: "Create tool policy"
-
-- If MCP servers exist: connection status legend (color descriptions for ready/connecting/failed/disconnected)
-- `name` (Input)
-- `description` (Input)
-- Tool checkbox list (max-h 24rem scrollable):
-  - Each tool: checkbox + name + MCP Badge (if source is mcp) + description + RiskPill
+- If MCP servers exist: connection status legend
+- `name`, `description`
+- Tool checkbox list (scrollable):
+  - Each tool: checkbox + name + MCP Badge + description + RiskBadge
 - Button: "Create tool policy"
-
-#### Modal: Tool Policy Edit
-
-- Fixed overlay (`z-50`, semi-transparent black background)
-- Card (max-w-2xl)
-- `name`, `description` Inputs
-- Tool checkbox list (same as creation form)
-- "Cancel", "Save changes" buttons
-
-#### Modal: Tool Policy Delete (`DeletePolicyDialog`)
-
-- If users are assigned: replacement policy selection is required
-- If no assignments: immediate deletion is possible
-- "Cancel", "Delete" buttons
 
 ### 4.7 File Policies Tab
 
-**Layout**: 2-column grid (`xl:grid-cols-[1.05fr_0.95fr]`)
+**Layout**: 2-column grid
 
 #### Left: Policy List
 
-**Header**: "File policies" + "Create file policy" button (opens modal)
-
 **Each Policy Card**:
-- Name + description
-- Pill: "system" / "custom"
+- Name + description + Badge: "system" / "custom"
 - Custom only: "Edit policy", "Delete policy" buttons
 - Root list: displayed in `scope:pathType:rootPath` format + "Delete" button
 - Root addition row (custom only):
-  - `rootPath` (Input)
-  - `pathType` (select: "dir" / "file")
-  - "Choose path" button (opens file browser modal)
+  - `rootPath` (Input), `pathType` (select: "dir" / "file")
+  - "Choose path" button (file browser modal)
   - "Add root" button (scope is fixed as "absolute")
 
 #### Right: Probe Path Card
 
-**Title**: "Probe path"
+- Path input + "Probe" button -> `api.adminProbePath()`
+- Result: visible/not found, inside/outside workspace, pathType, resolved path
 
-- Path input (Input)
-- "Probe" button → `api.adminProbePath()`
-- Result display:
-  - Pill: "visible to server" / "not found"
-  - Pill: "already inside workspace" / "outside workspace"
-  - Pill: pathType
-  - Text: resolved path, explanation of meaning, workspace check result
+#### Modals
 
-#### Modal: File Policy Create
-
-- `name`, `description` Inputs
-- "Cancel", "Create file policy" buttons
-
-#### Modal: File Policy Edit
-
-- `name`, `description` Inputs
-- "Cancel", "Save changes" buttons
-
-#### Modal: File Browser (`FileBrowser`)
-
-- max-w-5xl, max-h-[90vh]
-- "Close" button
-- `FileBrowser` component:
-  - Current path display
-  - Node list: each node
-    - Name + kind Badge + workspace Badge
-    - absolutePath display
-    - Directory: "Open" (expand subdirectory), "Add directory"
-    - File: "Add file"
-  - "Add" triggers `handleAddRootFromBrowser()`:
-    - If inside workspace: scope='workspace' + relative path
-    - If outside workspace: scope='absolute' + absolute path
-
-#### Modal: File Policy Delete (`DeletePolicyDialog`)
-
-- Same pattern as tool policy deletion
+- File policy create/edit: `name`, `description`
+- File browser (`FileBrowser`): directory expansion, path addition
+- File policy delete (`DeletePolicyDialog`)
 
 ### 4.8 Protection Rules Tab
 
-**Layout**: 2-column grid (`xl:grid-cols-[1.1fr_0.9fr]`)
+**Layout**: 2-column grid
 
 #### Left: Rule List
 
-**Title**: "Protection rules"
-
-**Warning Banner** (amber):
-- Applied to workspace-relative paths. External paths are covered by `**` globs.
-
-**Each Rule Card**:
-- Pattern (mono font) + note
-- Pill group: patternType, scope (system only), enabled state ("deny"/"disabled")
-- "Enable"/"Disable" button → `api.adminToggleProtectionRule()`
-- "Delete" button (non-system only) → `window.confirm()` → `api.adminDeleteProtectionRule()`
+- Warning banner: applied to workspace-relative paths
+- Each rule: pattern + note + Badge group (patternType, scope, enabled state)
+- "Enable"/"Disable", "Delete" buttons
 
 #### Right Top: Rule Creation Card
 
-**Title**: "Add protection rule"
-
-- `kind` (select):
-  - "File (exact match)" = `path`
-  - "Folder (directory tree)" = `dir`
-  - "Pattern (wildcard)" = `glob`
-- `pattern` (Input, placeholder changes based on kind)
-- Description text
+- `kind` (select: path/dir/glob), `pattern`
 - Button: "Create protection rule"
 
 #### Right Bottom: Path Inspection Card
 
-**Title**: "Inspect path"
-
-- Path input (Input, placeholder: "e.g. .env or src/secrets.json")
-- "Inspect" button → `api.adminInspectProtectionPath()`
-- Result display:
-  - Path (mono font)
-  - Pill: "Protected" (denied color) / "Not protected" (active color)
-  - Matched rule pattern (if any)
+- Path input + "Inspect" button
+- Result: "Protected" / "Not protected" + matched rule
 
 ### 4.9 Approvals Tab
 
-**Title**: "Approvals"
-**Description**: "Global queue for runs that are waiting on a human decision."
-
-**Approval List**: Each approval item
-- Pill(status) + toolName + timestamp
-- Reason text
-- Tool input JSON (dark background preview)
-- "Approve", "Deny" buttons → `api.adminDecideApproval()`
-
-**When 0 items**: "No pending approvals."
+- Approval list: Badge(status) + toolName + timestamp + reason + JSON input
+- "Approve", "Deny" buttons -> `api.adminDecideApproval()`
+- When 0 items: "No pending approvals."
 
 ### 4.10 Automations Tab
 
-**Title**: "Automations"
-**Description**: "Created by chat. Admin can inspect, pause, or delete in emergencies."
-
-**List**: Each automation
-- Name + owner ID + next run time
-- Status Pill
-- Instruction text (whitespace-pre-wrap)
-- "Pause" button → `api.adminPauseAutomation()` (pause only)
-- "Delete" button → `api.adminDeleteAutomation()`
-
-**When 0 items**: "No active automations."
+- List: name + owner ID + next run + Status Badge + instruction text
+- "Pause" -> `api.adminPauseAutomation()`
+- "Delete" -> `api.adminDeleteAutomation()`
+- When 0 items: "No active automations."
 
 ### 4.11 Tools Tab
 
-**Title**: "Tool catalog"
-**Description**: "Reference list for building tool policies."
-
-MCP connection status legend (when MCP servers exist)
-
-**Tool List**: Each tool
-- Name + McpBadge (if source is mcp)
-- McpStatusPill (MCP tools only: ready/connecting/failed/disconnected)
-- RiskPill
-- Description
-- input_schema JSON preview (dark background, formatted)
+- MCP connection status legend
+- Each tool: name + McpBadge + McpStatusBadge + RiskBadge + description + input_schema JSON
 
 ### 4.12 Skills Tab
 
-**Layout**: 2-column grid (`xl:grid-cols-[1.1fr_0.9fr]`)
+**Layout**: 2-column grid
 
 #### Left: Skill List
-
-**Title**: "Skills"
-
-**Each Skill Card**:
-- Name + description
-- "Edit" button → expand inline editing
-- "Delete" button → `window.confirm()` → `api.adminDeleteSkill()`
-
-**Inline Editing** (expands within the card of the skill being edited):
-- `description` (Input)
-- `prompt` (Textarea, min-height 12rem)
-- "Save" → `api.adminUpdateSkill()`, "Cancel"
+- Each skill: name + description + "Edit"/"Delete" buttons
+- Inline editing: `description`, `prompt` (Textarea)
 
 #### Right: Skill Creation Card
-
-**Title**: "Create skill"
-**Description**: "Name must be lowercase letters, numbers, and underscores only."
-
-- `name` (Input, placeholder: "e.g. code_review")
-- `description` (Input)
-- `prompt` (Textarea, min-height 14rem)
+- `name`, `description`, `prompt`
 - Button: "Create skill"
 
 ### 4.13 MCP Servers Tab
 
-**Layout**: 2-column grid (`xl:grid-cols-[1.1fr_0.9fr]`)
+**Layout**: 2-column grid
 
 #### Left: Server List
 
-**Title**: "MCP Servers"
-
-**Each Server Card**:
-- Name + protocol Pill (http=blue, stdio=purple)
-- Connection details: URL for http, command + args for stdio
-- Connection state Pill + tool count
-- Error display on failure (rose background)
-- Buttons: "Edit"/"Cancel", "Reconnect", "Delete"
-
-**Inline Editing** (expanded):
-- `mode` (select: stdio/http)
-- stdio mode: command, args (comma-separated), env (KeyValueEditor)
-- http mode: url, headers (KeyValueEditor)
-- "Save changes" button
-
-**Reconnect Behavior**:
-1. `api.adminReconnectMcpServer()`
-2. Update data with `loadAdmin()`
-3. `pollUntilMcpSettled()`: poll every 2 seconds, max 8 attempts
-   - Until state becomes 'ready' or 'failed'
+- Each server: name + protocol Badge + connection details + state Badge + tool count
+- Inline editing + "Reconnect" + "Delete" buttons
+- Post-reconnect polling: 2-second intervals, max 8 attempts
 
 #### Right: Server Addition Card
 
-**Title**: "Add MCP server"
-
-- `name` (Input)
-- `mode` (select: "stdio (local process)" / "http (remote server)")
-- stdio: `command`, `args` (comma-separated), `env` (KeyValueEditor, for secrets)
-- http: `url`, `headers` (KeyValueEditor, for secrets)
-- Button: "Add server" (while loading: "Connecting...")
-
-**KeyValueEditor** Component:
-- Manages an array of key-value pairs
-- Each row: key Input + value Input + delete button (x)
-- Add button: "+ Add"
-- If valuePlaceholder is "Value (secret)", type=password
-
-**Config Construction Logic**:
-```javascript
-// stdio
-config = { command }
-if (args) config.args = args.split(',').map(s => s.trim()).filter(Boolean)
-if (env) config.env = kvPairsToObject(envPairs)
-
-// http
-config = { url }
-if (headers) config.headers = kvPairsToObject(headerPairs)
-```
+- `name`, `mode` (stdio/http)
+- stdio: `command`, `args`, `env` (KeyValueEditor)
+- http: `url`, `headers` (KeyValueEditor)
+- Button: "Add server"
 
 ---
 
@@ -689,7 +627,6 @@ sizes: default | sm
 ### 5.4 Textarea
 
 - Multi-line input
-- min-height: 8rem
 - Same focus style as Input
 
 ### 5.5 Label
@@ -704,7 +641,7 @@ tones: default | success | warn | danger
 
 ### 5.7 Table / THead / TBody / TR / TH / TD
 
-- Table components (currently unused but exist)
+- Table components
 
 ### 5.8 DeletePolicyDialog
 
@@ -716,7 +653,6 @@ tones: default | success | warn | danger
 - `replacementRequired`: whether users are assigned
 - `replacementLabel`: additional description text
 - `onChange(policyId)`, `onCancel()`, `onConfirm()`
-- `t(key)`: translation function
 
 ### 5.9 FileBrowser
 
@@ -724,21 +660,8 @@ tones: default | success | warn | danger
 - `data`: `{ currentPath, nodes[] }`
 - `onBrowse(targetPath)`: callback for directory expansion
 - `onAddRoot(absolutePath, pathType)`: callback for path addition
-- `t(key)`: translation function
 
-### 5.10 ToolCatalogExplorer
-
-**Props**:
-- `plugins`: plugin array `[{ name, description, tools[] }]`
-- `selectedTools`: Set of selected tool names (nullable)
-- `onToggleTool(toolName)`: tool toggle callback
-- `t(key)`: translation function
-
-**Functionality**: Collapsible via `<details>` elements, displays tool argument schemas
-
-(Note: Currently AdminConsole uses inline checkbox lists, and ToolCatalogExplorer is not directly used)
-
-### 5.11 EmptyState
+### 5.10 EmptyState
 
 **Props**: `title`, `description`, `action` (JSX)
 
@@ -774,14 +697,21 @@ A centered display component for empty states.
 | GET | `/api/conversations/:id` | No | Get conversation details |
 | POST | `/api/conversations/:id/messages` | Yes | Send message (202 async) |
 
-### 6.4 Approvals
+### 6.4 SSE & Cancel
+
+| Method | Path | CSRF | Purpose |
+|--------|------|------|---------|
+| GET | `/api/conversations/:id/stream` | No | SSE streaming (text/event-stream) |
+| POST | `/api/runs/:runId/cancel` | Yes | Cancel Run |
+
+### 6.5 Approvals
 
 | Method | Path | CSRF | Purpose |
 |--------|------|------|---------|
 | POST | `/api/approvals/:id/decision` | Yes | User approve/deny |
 | POST | `/api/admin/approvals/:id/decision` | Yes | Admin approve/deny |
 
-### 6.5 Automations
+### 6.6 Automations
 
 | Method | Path | CSRF | Purpose |
 |--------|------|------|---------|
@@ -792,14 +722,14 @@ A centered display component for empty states.
 | PATCH | `/api/admin/automations/:id` | Yes | Admin pause |
 | DELETE | `/api/admin/automations/:id` | Yes | Admin delete |
 
-### 6.6 API Tokens
+### 6.7 API Tokens
 
 | Method | Path | CSRF | Purpose |
 |--------|------|------|---------|
 | POST | `/api/me/tokens` | Yes | Create token |
 | DELETE | `/api/me/tokens/:id` | Yes | Revoke token |
 
-### 6.7 User Management
+### 6.8 User Management
 
 | Method | Path | CSRF | Purpose |
 |--------|------|------|---------|
@@ -809,7 +739,7 @@ A centered display component for empty states.
 | POST | `/api/admin/users/:id/password` | Yes | Set password |
 | PATCH | `/api/admin/users/:id/policies` | Yes | Assign policies |
 
-### 6.8 Tool Policies
+### 6.9 Tool Policies
 
 | Method | Path | CSRF | Purpose |
 |--------|------|------|---------|
@@ -817,7 +747,7 @@ A centered display component for empty states.
 | PATCH | `/api/admin/tool-policies/:id` | Yes | Update |
 | DELETE | `/api/admin/tool-policies/:id` | Yes | Delete (body: replacementPolicyId) |
 
-### 6.9 File Policies
+### 6.10 File Policies
 
 | Method | Path | CSRF | Purpose |
 |--------|------|------|---------|
@@ -827,14 +757,14 @@ A centered display component for empty states.
 | POST | `/api/admin/file-policies/:id/roots` | Yes | Add root |
 | DELETE | `/api/admin/file-policies/:id/roots/:rootId` | Yes | Delete root |
 
-### 6.10 File System
+### 6.11 File System
 
 | Method | Path | CSRF | Purpose |
 |--------|------|------|---------|
 | GET | `/api/admin/fs/probe?path=` | No | Probe path |
 | GET | `/api/admin/fs/browse?path=` | No | Browse directory |
 
-### 6.11 Protection Rules
+### 6.12 Protection Rules
 
 | Method | Path | CSRF | Purpose |
 |--------|------|------|---------|
@@ -843,7 +773,7 @@ A centered display component for empty states.
 | DELETE | `/api/admin/protection-rules/:id` | Yes | Delete |
 | POST | `/api/admin/protection-rules/inspect` | Yes | Inspect path protection |
 
-### 6.12 Skills
+### 6.13 Skills
 
 | Method | Path | CSRF | Purpose |
 |--------|------|------|---------|
@@ -851,7 +781,7 @@ A centered display component for empty states.
 | PATCH | `/api/admin/skills/:name` | Yes | Update |
 | DELETE | `/api/admin/skills/:name` | Yes | Delete |
 
-### 6.13 MCP Servers
+### 6.14 MCP Servers
 
 | Method | Path | CSRF | Purpose |
 |--------|------|------|---------|
@@ -912,7 +842,16 @@ A centered display component for empty states.
 }
 ```
 
-### 7.5 admin bootstrap data
+### 7.5 streamingMessage
+
+```typescript
+{
+  text: string    // Text accumulated from SSE delta events
+  runId: string   // Associated Run ID
+} | null
+```
+
+### 7.6 admin bootstrap data
 
 ```typescript
 {
@@ -974,9 +913,11 @@ A centered display component for empty states.
 
 Files that **must not be changed** when rebuilding the UI:
 
-- `src/admin-web/src/lib/api.js` -- API communication layer (use as-is)
-- `src/admin-web/src/lib/utils.js` -- `cn()` utility
-- `src/admin-web/src/i18n/` -- Translation files (can be utilized in the future)
+- `src/admin-web/src/lib/api.js` --- API communication layer (use as-is)
+- `src/admin-web/src/lib/axios.js` --- axios instance + interceptors
+- `src/admin-web/src/lib/sse.js` --- SSE client (use as-is)
+- `src/admin-web/src/lib/utils.js` --- `cn()` utility
+- `src/admin-web/src/i18n/` --- Translation files (can be utilized in the future)
 - All backend code (everything in `src/` except `admin-web/`)
 
 ---
@@ -985,9 +926,8 @@ Files that **must not be changed** when rebuilding the UI:
 
 > These are characteristics of the current implementation that may be improved during a rebuild.
 
-1. **react-router-dom is unused**: Installed but substituted with `window.location.pathname`. Introducing routing would enable URL-based admin tabs
-2. **i18n is not utilized**: Context/translations exist but App.jsx/AdminConsole.jsx uses English text directly
-3. **Polling-based**: Full refresh every 4 seconds. Could be optimized with WebSocket/SSE
-4. **Monolithic components**: AdminConsole.jsx is 1559 lines. Splitting by tab would be desirable
-5. **Form validation**: No client-side validation (everything relies on the server)
-6. **select elements**: Uses native `<select>`. Could be replaced with custom dropdowns
+1. **i18n is not utilized**: Context/translations exist but each page uses English text directly
+2. **Large custom hook**: `useWorkspace.js` holds many responsibilities. Splitting SSE management, API calls, and state operations would be desirable
+3. **Form validation**: No client-side validation (everything relies on the server)
+4. **select elements**: Uses native `<select>`. Could be replaced with custom dropdowns
+5. **SSE reconnection**: Does not auto-reconnect on error, falls back to polling. Room for exponential backoff reconnection

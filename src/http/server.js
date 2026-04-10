@@ -488,6 +488,60 @@ async function handleApiRequest(req, res) {
 			return
 		}
 
+		const cancelRunParams = matchPath(url.pathname, '/api/runs/:runId/cancel')
+		if (req.method === 'POST' && cancelRunParams) {
+			const authenticated = requireActor(actor)
+			requireCsrf(authenticated, req)
+			sendJson(res, 200, {
+				ok: true,
+				data: app.cancelRun({
+					runId: cancelRunParams.runId,
+					actor: authenticated
+				})
+			})
+			return
+		}
+
+		const streamParams = matchPath(url.pathname, '/api/conversations/:conversationId/stream')
+		if (req.method === 'GET' && streamParams) {
+			const authenticated = requireActor(actor)
+			const conversation = app.getConversationView({
+				conversationId: streamParams.conversationId,
+				actor: authenticated
+			})
+			if (!conversation) {
+				sendJson(res, 404, { ok: false, error: 'Conversation not found.' })
+				return
+			}
+
+			res.writeHead(200, {
+				'Content-Type': 'text/event-stream',
+				'Cache-Control': 'no-cache',
+				Connection: 'keep-alive',
+				'X-Accel-Buffering': 'no'
+			})
+			res.write(': connected\n\n')
+
+			const heartbeat = setInterval(() => {
+				res.write(': heartbeat\n\n')
+			}, 30000)
+
+			const listener = (event) => {
+				try {
+					res.write(`event: ${event.type}\ndata: ${JSON.stringify(event.data)}\n\n`)
+				} catch {}
+			}
+			app.addRunEventListener(streamParams.conversationId, listener)
+
+			const cleanup = () => {
+				clearInterval(heartbeat)
+				app.removeRunEventListener(streamParams.conversationId, listener)
+			}
+			req.on('close', cleanup)
+			req.on('error', cleanup)
+			return
+		}
+
 		const approvalDecisionParams = matchPath(url.pathname, '/api/approvals/:approvalId/decision')
 		if (req.method === 'POST' && approvalDecisionParams) {
 			const authenticated = requireActor(actor)
@@ -1006,6 +1060,11 @@ export async function startApiServer({
 		const address = server.address()
 		const actualPort = typeof address === 'object' && address ? address.port : port
 		console.log(`microHarnessEngine API listening on http://localhost:${actualPort}`)
+		if (process.env.MHE_DEV) {
+			console.log(`  Web UI (dev): http://localhost:4173`)
+		} else {
+			console.log(`  Web UI: http://localhost:${actualPort}`)
+		}
 		app.recoverInterruptedRuns().catch(error => {
 			console.error('Startup recovery failed:', error?.message || error)
 		})

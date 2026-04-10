@@ -28,6 +28,7 @@ graph TB
     end
 
     WEB -->|Cookie Session| HTTP
+    WEB <-.->|SSE Stream| HTTP
     API -->|Bearer Token| HTTP
     SLACK -->|Webhook + Signature Verification| HTTP
     DISCORD -->|Webhook + Signature Verification| HTTP
@@ -36,7 +37,7 @@ graph TB
     HTTP --> SA --> APP
     HTTP --> DA --> APP
 
-    APP -->|Response Delivery| WA
+    APP -.->|SSE Event Delivery| WA
     APP -->|chat.postMessage| SA
     APP -->|channels/messages| DA
 ```
@@ -69,9 +70,30 @@ http://localhost:4310/
 
 - Create and switch conversations
 - Send and receive messages
+- SSE streaming (real-time display of LLM responses)
+- Run cancellation (interrupt an in-progress agent)
 - Process approval requests (Approve / Deny)
 - View Automations
 - Issue and revoke Personal Access Tokens
+
+### Real-Time Communication
+
+The Web UI uses SSE (Server-Sent Events) to receive agent execution status in real time.
+
+**SSE Connection Specification**:
+- Endpoint: `GET /api/conversations/:conversationId/stream`
+- Cookie authentication (`credentials: 'include'`)
+- Custom client implementation using `fetch()` + `ReadableStream` (not `EventSource`)
+- Heartbeat: every 30 seconds
+
+**Received Events**:
+- `delta` --- LLM streaming text -> displayed in real time in the chat screen
+- `run.completed` / `run.cancelled` / `run.failed` --- Run ended -> screen refresh
+- `approval.requested` --- Display approval UI
+
+**Fallback Specification**:
+- On SSE connection error, automatically switches to 4-second interval polling (`loadWorkspace()`)
+- SSE auto-reconnection is not performed (until component remount)
 
 ### WAN Exposure
 

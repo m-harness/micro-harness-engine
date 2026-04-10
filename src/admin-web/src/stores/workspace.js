@@ -8,3 +8,5 @@ export const workspaceAtom = atom({
 export const selectedConversationIdAtom = atom(null)
 
 export const conversationViewAtom = atom(null)
+
+export const streamingMessageAtom = atom(null)

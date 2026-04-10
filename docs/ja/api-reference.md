@@ -29,7 +29,8 @@ Bearer Token 認証時は不要です。
 
 ### レスポンス形式
 
-すべて `application/json` です。
+REST エンドポイントはすべて `application/json` です。
+SSE エンドポイントは `text/event-stream` で応答します（後述）。
 
 ### エラーレスポンス
 
@@ -165,6 +166,62 @@ Bearer Token 認証時は不要です。
 ```
 
 エージェントループは非同期で開始されます。
+
+### `GET /api/conversations/:conversationId/stream`
+
+SSE (Server-Sent Events) ストリーミングエンドポイント。会話に紐づくエージェントのリアルタイムイベントを受信します。
+
+**レスポンスヘッダ**:
+
+| ヘッダ | 値 |
+|---|---|
+| `Content-Type` | `text/event-stream` |
+| `Cache-Control` | `no-cache` |
+| `Connection` | `keep-alive` |
+| `X-Accel-Buffering` | `no` |
+
+**初期接続**: `: connected\n\n` コメントを送信
+
+**ハートビート**: 30秒間隔で `: heartbeat\n\n` コメントを送信
+
+**イベント形式**:
+
+```
+event: <イベント種別>
+data: <JSONペイロード>
+
+```
+
+**イベント種別**:
+
+| イベント | データ | 説明 |
+|---|---|---|
+| `run.started` | `{ runId, status, phase }` | Run 開始 |
+| `delta` | `{ runId, type: 'text_delta', text }` | LLMストリーミングテキスト |
+| `tool_call` | `{ runId, name, input }` | ツール呼び出し開始 |
+| `tool_result` | `{ runId, name, output }` | ツール実行結果 |
+| `approval.requested` | `{ runId, approvalId, toolName }` | 承認リクエスト |
+| `run.completed` | `{ runId, status, finalText }` | Run 正常完了 |
+| `run.cancelled` | `{ runId }` | Run キャンセル |
+| `run.failed` | `{ runId, error }` | Run 失敗 |
+
+**接続終了**: クライアント切断時にリスナーは自動的にクリーンアップされます。
+
+### `POST /api/runs/:runId/cancel`
+
+**CSRF必要** — 実行中の Run をキャンセルします。
+
+```json
+// Response 200
+{ "ok": true, "data": { "ok": true } }
+```
+
+**キャンセル可能なステータス**: `queued`, `running`, `recovering`
+
+**エラー条件**:
+- Run が存在しない場合: `404`
+- キャンセル不可能なステータスの場合: `409`
+- 認証が必要: `401`
 
 ### `POST /api/approvals/:approvalId/decision`
 
@@ -363,6 +420,13 @@ Bearer Token 認証時は不要です。
 |---|---|---|---|
 | `POST` | `/api/integrations/slack/events` | Slack署名 | イベント受信 + URL検証 |
 | `POST` | `/api/integrations/slack/actions` | Slack署名 | Block Kitインタラクション |
+
+### SSE・キャンセル
+
+| メソッド | パス | CSRF | 説明 |
+|---|---|---|---|
+| `GET` | `/api/conversations/:conversationId/stream` | 不要 | SSEストリーミング (text/event-stream) |
+| `POST` | `/api/runs/:runId/cancel` | 要 | Run キャンセル |
 
 ### Discord
 

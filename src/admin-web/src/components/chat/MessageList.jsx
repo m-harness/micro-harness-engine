@@ -1,16 +1,29 @@
 import { useEffect, useRef } from 'react'
+import { useAtom } from 'jotai'
 import { useI18n } from '../../i18n/context.jsx'
-import { MessageBubble } from './MessageBubble.jsx'
+import { MessageBubble, StreamingBubble } from './MessageBubble.jsx'
 import { EmptyState } from '../shared/EmptyState.jsx'
 import { ScrollArea } from '../ui/scroll-area.jsx'
+import { streamingMessageAtom } from '../../stores/workspace.js'
+
+const SCROLL_THRESHOLD = 50
 
 export function MessageList({ messages, hasConversation }) {
 	const { t } = useI18n()
+	const [streamingMessage] = useAtom(streamingMessageAtom)
 	const bottomRef = useRef(null)
+	const isAtBottomRef = useRef(true)
+
+	const handleScroll = (e) => {
+		const { scrollTop, scrollHeight, clientHeight } = e.currentTarget
+		isAtBottomRef.current = scrollHeight - scrollTop - clientHeight <= SCROLL_THRESHOLD
+	}
 
 	useEffect(() => {
-		bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
-	}, [messages?.length])
+		if (isAtBottomRef.current) {
+			bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+		}
+	}, [messages?.length, streamingMessage?.text])
 
 	if (!hasConversation) {
 		return (
@@ -35,11 +48,14 @@ export function MessageList({ messages, hasConversation }) {
 	}
 
 	return (
-		<ScrollArea className="flex-1">
+		<ScrollArea className="flex-1" onScroll={handleScroll}>
 			<div className="mx-auto max-w-3xl space-y-5 px-4 py-4 lg:px-6">
 				{messages.map(message => (
 					<MessageBubble key={message.id} message={message} />
 				))}
+				{streamingMessage?.text && (
+					<StreamingBubble text={streamingMessage.text} />
+				)}
 				<div ref={bottomRef} />
 			</div>
 		</ScrollArea>

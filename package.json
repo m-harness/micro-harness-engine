@@ -4,7 +4,7 @@
 	"type": "module",
 	"scripts": {
 		"start": "node src/index.js",
-		"dev": "node --watch-path=src src/index.js",
+		"dev": "cross-env MHE_DEV=1 node --watch-path=src src/index.js",
 		"dev:web": "npm --prefix src/admin-web run dev",
 		"dev:full": "concurrently -n api,web -c blue,green \"npm run dev\" \"npm run dev:web\"",
 		"build:web": "npm --prefix src/admin-web run build",
@@ -25,6 +25,7 @@
 	},
 	"devDependencies": {
 		"concurrently": "^9.2.1",
+		"cross-env": "^7.0.3",
 		"vitest": "^4.1.3"
 	}
 }

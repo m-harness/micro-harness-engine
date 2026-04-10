@@ -28,6 +28,7 @@ graph TB
     end
 
     WEB -->|Cookie Session| HTTP
+    WEB <-.->|SSE ストリーム| HTTP
     API -->|Bearer Token| HTTP
     SLACK -->|Webhook + 署名検証| HTTP
     DISCORD -->|Webhook + 署名検証| HTTP
@@ -36,7 +37,7 @@ graph TB
     HTTP --> SA --> APP
     HTTP --> DA --> APP
 
-    APP -->|応答配信| WA
+    APP -.->|SSE イベント配信| WA
     APP -->|chat.postMessage| SA
     APP -->|channels/messages| DA
 ```
@@ -69,9 +70,30 @@ http://localhost:4310/
 
 - 会話の作成・切り替え
 - メッセージの送受信
+- SSE ストリーミング（LLM応答のリアルタイム表示）
+- Run キャンセル（実行中エージェントの中断）
 - 承認リクエストの処理（Approve / Deny）
 - Automationの確認
 - Personal Access Token の発行・失効
+
+### リアルタイム通信
+
+Web UI は SSE (Server-Sent Events) を使用してエージェントの実行状況をリアルタイムに受信します。
+
+**SSE 接続仕様**:
+- エンドポイント: `GET /api/conversations/:conversationId/stream`
+- Cookie 認証（`credentials: 'include'`）
+- `fetch()` + `ReadableStream` による独自クライアント実装（`EventSource` 非使用）
+- ハートビート: 30秒間隔
+
+**受信イベント**:
+- `delta` — LLMのストリーミングテキスト → チャット画面にリアルタイム表示
+- `run.completed` / `run.cancelled` / `run.failed` — Run 終了 → 画面更新
+- `approval.requested` — 承認UI表示
+
+**フォールバック仕様**:
+- SSE 接続エラー時は 4秒間隔のポーリング（`loadWorkspace()`）に自動切替
+- SSE の自動再接続は行わない（コンポーネント再マウントまで）
 
 ### WAN公開
 

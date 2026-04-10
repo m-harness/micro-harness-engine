@@ -211,7 +211,13 @@ export const translations = {
 				deleteToolPolicy: 'Delete tool policy',
 				deleteDescription: 'Delete this tool policy.',
 				replacementRequired: 'This policy is assigned to users. Choose a replacement.',
-				noUsersAssigned: 'No users are assigned to this policy.'
+				noUsersAssigned: 'No users are assigned to this policy.',
+				searchTools: 'Search tools...',
+				noResults: 'No tools found',
+				orphanedTools: 'Unavailable Tools',
+				toolUnavailable: 'removed',
+				toolUnavailableDescription: 'This tool is no longer available. Uncheck to remove from policy.',
+				orphanedToolsWarning: '{count} unavailable tool(s)'
 			},
 			filePolicies: {
 				title: 'File Policies',
@@ -358,6 +364,8 @@ export const translations = {
 			unknownError: 'Unknown error',
 			sendHint: 'Cmd/Ctrl+Enter to send',
 			send: 'Send',
+			stop: 'Stop',
+			stopHint: 'to stop',
 			noSession: 'No session selected',
 			noSessionDescription: 'Pick a conversation from the sidebar or create a new one.',
 			readyTitle: 'Ready when you are',
@@ -603,7 +611,13 @@ export const translations = {
 				deleteToolPolicy: 'ツールポリシー削除',
 				deleteDescription: 'このツールポリシーを削除します。',
 				replacementRequired: 'このポリシーはユーザーに割り当てられています。代替を選択してください。',
-				noUsersAssigned: 'このポリシーに割り当てられたユーザーはいません。'
+				noUsersAssigned: 'このポリシーに割り当てられたユーザーはいません。',
+				searchTools: 'ツールを検索...',
+				noResults: '該当するツールがありません',
+				orphanedTools: '利用不可ツール',
+				toolUnavailable: '削除済み',
+				toolUnavailableDescription: 'このツールはカタログから削除されています。チェックを外してください。',
+				orphanedToolsWarning: '{count} 件の利用不可ツール'
 			},
 			filePolicies: {
 				title: '外部参照ポリシー',
@@ -750,6 +764,8 @@ export const translations = {
 			unknownError: '不明なエラー',
 			sendHint: 'Cmd/Ctrl+Enterで送信',
 			send: '送信',
+			stop: '停止',
+			stopHint: 'で停止',
 			noSession: 'セッションが選択されていません',
 			noSessionDescription: 'サイドバーから会話を選択するか、新しい会話を作成してください。',
 			readyTitle: 'お任せください',
