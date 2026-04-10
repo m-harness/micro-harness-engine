@@ -2,7 +2,7 @@ import {
 	BarChart3, Users, Shield, FolderLock, ShieldCheck,
 	CheckSquare, Zap, Wrench, Sparkles, Server, LogOut, Menu
 } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { NavLink, Outlet } from 'react-router-dom'
 import { useAdmin } from '../../hooks/useAdmin.js'
 import { useI18n } from '../../i18n/context.jsx'
@@ -79,6 +79,11 @@ function SidebarNav({ onSelect }) {
 export default function AdminLayout() {
 	const [sidebarOpen, setSidebarOpen] = useState(false)
 	const { t } = useI18n()
+	const { data, loadAdmin } = useAdmin()
+
+	useEffect(() => {
+		if (!data) loadAdmin()
+	}, [data, loadAdmin])
 
 	return (
 		<div className="flex h-screen bg-background">

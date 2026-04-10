@@ -19,6 +19,11 @@ function ToolCheckboxList({ tools, onChange, toolCatalog, mcpServers }) {
 	const [search, setSearch] = useState('')
 	const [collapsed, setCollapsed] = useState(() => new Set())
 
+	const orphanedTools = useMemo(() => {
+		const catalogNames = new Set(toolCatalog.map(t => t.name))
+		return tools.filter(name => !catalogNames.has(name))
+	}, [tools, toolCatalog])
+
 	const filtered = useMemo(() => {
 		if (!search.trim()) return toolCatalog
 		const q = search.trim().toLowerCase()
@@ -108,6 +113,48 @@ function ToolCheckboxList({ tools, onChange, toolCatalog, mcpServers }) {
 						</div>
 					)
 				})}
+				{orphanedTools.length > 0 && !search.trim() && (
+					<div className="mb-1">
+						<button
+							className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm font-medium hover:bg-muted/50"
+							onClick={() => toggleCategory('__orphaned__')}
+							type="button"
+						>
+							<ChevronRight className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform duration-200 ${!collapsed.has('__orphaned__') ? 'rotate-90' : ''}`} />
+							<span>{t('admin.toolPolicies.orphanedTools')}</span>
+							<span className="ml-1 rounded bg-destructive/10 px-1.5 py-0.5 text-[10px] font-semibold text-destructive">{orphanedTools.length}</span>
+						</button>
+						<AnimatePresence initial={false}>
+							{!collapsed.has('__orphaned__') && (
+								<motion.div
+									initial={{ height: 0, opacity: 0 }}
+									animate={{ height: 'auto', opacity: 1 }}
+									exit={{ height: 0, opacity: 0 }}
+									transition={{ duration: 0.2, ease: 'easeInOut' }}
+									className="overflow-hidden"
+								>
+									<div className="grid gap-2 py-1 pl-8 pr-2">
+										{orphanedTools.map(name => (
+											<label className="flex items-start gap-3 text-sm" key={name}>
+												<input
+													checked={tools.includes(name)}
+													onChange={e => onChange(e.target.checked ? [...tools, name] : tools.filter(n => n !== name))}
+													type="checkbox"
+													className="mt-1"
+												/>
+												<span>
+													<span className="font-medium line-through text-muted-foreground">{name}</span>
+													{' '}<span className="rounded bg-destructive/10 px-1.5 py-0.5 text-[10px] font-semibold text-destructive">{t('admin.toolPolicies.toolUnavailable')}</span>
+													<span className="block text-xs text-muted-foreground">{t('admin.toolPolicies.toolUnavailableDescription')}</span>
+												</span>
+											</label>
+										))}
+									</div>
+								</motion.div>
+							)}
+						</AnimatePresence>
+					</div>
+				)}
 			</ScrollArea>
 		</div>
 	)

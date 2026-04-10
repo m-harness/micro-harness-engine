@@ -213,7 +213,10 @@ export const translations = {
 				replacementRequired: 'This policy is assigned to users. Choose a replacement.',
 				noUsersAssigned: 'No users are assigned to this policy.',
 				searchTools: 'Search tools...',
-				noResults: 'No tools found'
+				noResults: 'No tools found',
+				orphanedTools: 'Unavailable Tools',
+				toolUnavailable: 'removed',
+				toolUnavailableDescription: 'This tool is no longer available. Uncheck to remove from policy.'
 			},
 			filePolicies: {
 				title: 'File Policies',
@@ -609,7 +612,10 @@ export const translations = {
 				replacementRequired: 'このポリシーはユーザーに割り当てられています。代替を選択してください。',
 				noUsersAssigned: 'このポリシーに割り当てられたユーザーはいません。',
 				searchTools: 'ツールを検索...',
-				noResults: '該当するツールがありません'
+				noResults: '該当するツールがありません',
+				orphanedTools: '利用不可ツール',
+				toolUnavailable: '削除済み',
+				toolUnavailableDescription: 'このツールはカタログから削除されています。チェックを外してください。'
 			},
 			filePolicies: {
 				title: '外部参照ポリシー',

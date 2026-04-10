@@ -93,6 +93,11 @@ function validateToolNames(toolNames, catalog) {
 	}
 }
 
+function filterToKnownToolNames(toolNames, catalog) {
+	const knownTools = new Set(catalog.map(tool => tool.name))
+	return toolNames.filter(name => knownTools.has(name))
+}
+
 /**
  * MCPツール名のサニタイズ: Claude APIの名前規則 ^[a-zA-Z0-9_-]{1,128}$ に合わせる。
  * "serverName__toolName" 形式の場合、サーバー名プレフィックスを保持したままツール名部分をサニタイズする。
@@ -234,7 +239,6 @@ export class PolicyService {
 		}
 
 		const toolNames = normalizeToolNames(payload.tools)
-		validateToolNames(toolNames, this.getToolCatalog())
 		updateToolPolicy({
 			id: current.id,
 			name: String(payload.name || current.name).trim(),
