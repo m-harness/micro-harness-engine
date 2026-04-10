@@ -13,67 +13,137 @@
 
 | 画面 | パス | 認証 | 用途 |
 |------|------|------|------|
-| **ユーザーワークスペース** | `/` | ユーザーセッション (`microharnessengine_session` cookie) | チャット・承認・オートメーション・APIトークン管理 |
-| **管理コンソール** | `/admin` | 管理者セッション (`microharnessengine_admin_session` cookie) | ユーザー発行・ポリシー管理・運用監視 |
+| **ユーザーワークスペース** | `/`, `/c/:conversationId` | ユーザーセッション (`microharnessengine_session` cookie) | チャット・承認・オートメーション・APIトークン管理 |
+| **管理コンソール** | `/admin/*` | 管理者セッション (`microharnessengine_admin_session` cookie) | ユーザー発行・ポリシー管理・運用監視 |
 
-- ルーティングは `window.location.pathname` で判定（react-router-dom は未使用）
-- `/admin` のときは `AdminConsole` コンポーネントを丸ごとレンダリング
-- それ以外は `App` コンポーネント（ユーザーワークスペース）
+- ルーティングは `react-router-dom` v6 を使用（`BrowserRouter` + `lazy()` + `Suspense`）
+- 全ページはコード分割（`lazy()` でインポート）
 
 ### 1.2 エントリーポイント
 
 ```
-main.jsx → <App />
-  ├─ pathname が /admin → <AdminConsole />
-  └─ それ以外 → ワークスペース UI
+main.jsx → <BrowserRouter>
+  └─ <JotaiProvider>
+       └─ <Toaster richColors position="top-right" />  (sonner)
+            └─ <App />  (ルート定義)
 ```
+
+### 1.3 ルートテーブル
+
+| パス | コンポーネント | 認証ガード | レイアウト |
+|------|------|------|------|
+| `/login` | `LoginPage` | なし | なし |
+| `/admin/login` | `AdminLoginPage` | なし | なし |
+| `/` (index) | `WorkspacePage` | `ProtectedRoute type="user"` | `WorkspaceLayout` |
+| `/c/:conversationId` | `WorkspacePage` | `ProtectedRoute type="user"` | `WorkspaceLayout` |
+| `/admin` (index) | `OverviewPage` | `ProtectedRoute type="admin"` | `AdminLayout` |
+| `/admin/users` | `UsersPage` | `ProtectedRoute type="admin"` | `AdminLayout` |
+| `/admin/tool-policies` | `ToolPoliciesPage` | `ProtectedRoute type="admin"` | `AdminLayout` |
+| `/admin/file-policies` | `FilePoliciesPage` | `ProtectedRoute type="admin"` | `AdminLayout` |
+| `/admin/protection-rules` | `ProtectionRulesPage` | `ProtectedRoute type="admin"` | `AdminLayout` |
+| `/admin/approvals` | `ApprovalsPage` | `ProtectedRoute type="admin"` | `AdminLayout` |
+| `/admin/automations` | `AutomationsPage` | `ProtectedRoute type="admin"` | `AdminLayout` |
+| `/admin/tools` | `ToolsPage` | `ProtectedRoute type="admin"` | `AdminLayout` |
+| `/admin/skills` | `SkillsPage` | `ProtectedRoute type="admin"` | `AdminLayout` |
+| `/admin/mcp-servers` | `McpServersPage` | `ProtectedRoute type="admin"` | `AdminLayout` |
+| `*` (catch-all) | `Navigate to="/"` | なし | なし |
+
+`ProtectedRoute`: マウント時に `api.getAuthState()` (user) / `api.getAdminAuthState()` (admin) を呼び出し、未認証なら `/login` or `/admin/login` にリダイレクト。
+
+### 1.4 非Reactコードからのナビゲーション
+
+`navigateRef.js` で `useNavigate()` / `useLocation()` をモジュールレベル ref にキャプチャし、axios インターセプタ（401時のリダイレクト等）から呼び出せるようにしています。
 
 ---
 
 ## 2. 共通パターン
 
-### 2.1 状態管理
+### 2.1 状態管理 (jotai)
 
-- **外部ライブラリなし**: 全て `useState` のみ
-- **グローバルストアなし**: コンポーネント内にすべてのステートを保持
-- フォーム値も `useState` で個別管理（フォームライブラリ不使用）
+グローバル状態は jotai atom で管理されます。全 atom は `atom()` プリミティブです。
 
-### 2.2 API通信レイヤー (`lib/api.js`)
+#### workspace.js
 
-```
-request(path, { method, body, csrfToken, headers })
-```
+| atom | デフォルト値 | 用途 |
+|------|------|------|
+| `workspaceAtom` | `{ conversations: [], apiTokens: [] }` | ブートストラップデータ |
+| `selectedConversationIdAtom` | `null` | 選択中の会話ID |
+| `conversationViewAtom` | `null` | 選択中の会話詳細 (messages, approvals, automations, activeRun, lastFailedRun) |
+| `streamingMessageAtom` | `null` | SSEストリーミング中のテキスト蓄積 `{ text, runId }` |
 
-- `fetch` で `credentials: 'include'` (cookie自動送信)
-- mutation (POST/PATCH/DELETE) では `x-csrf-token` ヘッダーを付与
-- レスポンスは `{ ok: true, data: {...} }` 形式、`data` を返す
-- エラー時は `throw new Error(payload.error)` → 呼び出し元の `runAction` でキャッチ
+#### ui.js
 
-### 2.3 ローディング管理 (`busyKey` パターン)
+| atom | デフォルト値 | 用途 |
+|------|------|------|
+| `themeAtom` | `localStorage 'mhe-theme'` or `'light'` | ダーク/ライトテーマ |
+| `workspaceBusyKeyAtom` | `''` | ワークスペースローディング状態 |
+| `adminBusyKeyAtom` | `''` | 管理画面ローディング状態 |
+
+#### auth.js
+
+| atom | デフォルト値 | 用途 |
+|------|------|------|
+| `authStateAtom` | `{ user: null, csrfToken: '', bootstrapRequired: false, webBootstrapEnabled: false }` | ユーザー認証状態 |
+| `adminAuthStateAtom` | `{ adminAuthenticated: false, csrfToken: '', adminEnabled: false, user: null }` | 管理者認証状態 |
+
+#### admin.js
+
+| atom | デフォルト値 | 用途 |
+|------|------|------|
+| `adminDataAtom` | `null` | 管理ブートストラップデータ |
+
+### 2.2 API通信レイヤー
+
+#### REST (lib/api.js + lib/axios.js)
+
+- `axios` インスタンスに `withCredentials: true` 設定
+- リクエストインターセプタ: 非GETリクエストに `x-csrf-token` ヘッダを付与（ユーザー/管理者で別トークン）
+- レスポンスインターセプタ: `{ ok, data, error }` エンベロープをアンラップして `data` を返却。401エラー時は `navigateRef` 経由でログイン画面にリダイレクト
+- エラー時は `throw new Error(payload.error)` → `runAction` でキャッチ
+
+#### SSE (lib/sse.js)
+
+`createSSEConnection(url, { onEvent, onError, onClose })` — `EventSource` ではなく `fetch()` + `ReadableStream` による独自実装:
+
+- `credentials: 'include'` で Cookie 認証
+- `Accept: 'text/event-stream'` ヘッダ
+- レスポンスボディを `getReader()` でチャンク読み取り
+- `\n\n` でイベント境界分割、`event:` / `data:` 行を解析
+- `:` で始まるコメント行（ハートビート）は無視
+- `data` は `JSON.parse()` を試行、失敗時は生文字列
+- コールバック: `onEvent({ type, data })`, `onError(err)`, `onClose()`
+- 戻り値: `{ close() }` — `AbortController.abort()` で切断
+- `AbortError` は意図的なクローズとして無視
+
+### 2.3 ローディング管理 (`workspaceBusyKeyAtom` + `runAction` パターン)
 
 ```javascript
-const [busyKey, setBusyKey] = useState('')
-
-async function runAction(key, callback) {
-  setBusyKey(key)
-  try { await callback() }
-  catch (error) { showFlash(error.message, 'error') }
-  finally { setBusyKey('') }
-}
+const runAction = useCallback(async (key, callback) => {
+    setBusyKey(key)        // workspaceBusyKeyAtom に設定
+    try {
+        await callback()
+    } catch (error) {
+        toast.error(error.message)   // sonner toast
+    } finally {
+        setBusyKey('')     // クリア
+    }
+}, [setBusyKey])
 ```
 
 - 各ボタンは `disabled={busyKey === 'key-name'}` で二重送信防止
 - ボタンのラベルを `busyKey` に応じて「Sending...」等に切替
 
-### 2.4 フラッシュメッセージ (トースト通知)
+**使用されるキー**: `'create-conversation'`, `'select-<id>'`, `'send-message'`, `'cancel-run'`, `'approval-<id>'`, `'create-automation'`, `'automation-<id>'`, `'run-<id>'`, `'delete-<id>'`, `'create-token'`, `'revoke-<id>'`
 
-```javascript
-const [flash, setFlash] = useState(null) // { message, kind }
-```
+管理画面でも同じパターンを `adminBusyKeyAtom` で使用。
 
-- `kind`: `'info'`(teal系) / `'error'`(rose系)
-- 4200ms 後に自動消去 (`useEffect` + `setTimeout`)
-- 画面上部に表示
+### 2.4 フラッシュメッセージ (sonner toast)
+
+`sonner` ライブラリの `toast` を使用:
+
+- `toast.error(message)` — エラー通知（`runAction` の catch、ログイン失敗等）
+- `toast.success(message)` — 成功通知（ログイン成功時等）
+- 設定: `<Toaster richColors position="top-right" />`
 
 ### 2.5 日付フォーマット
 
@@ -86,7 +156,7 @@ new Intl.DateTimeFormat('ja-JP', {
 
 - 値がない場合は `'Not yet'` を表示
 
-### 2.6 ステータスバッジ (`Pill` コンポーネント)
+### 2.6 ステータスバッジ (`StatusBadge` コンポーネント)
 
 ステータス文字列 → 色のマッピング:
 
@@ -96,6 +166,7 @@ new Intl.DateTimeFormat('ja-JP', {
 | `queued`, `running`, `waiting_approval`, `pending` | amber (黄) |
 | `recovering` | orange |
 | `paused` | slate (灰) |
+| `cancelled` | slate (灰) |
 | `denied`, `failed`, `disabled`, `deleted` | rose (赤) |
 | その他 | slate (灰) デフォルト |
 
@@ -104,7 +175,13 @@ new Intl.DateTimeFormat('ja-JP', {
 - 削除系の操作は `window.confirm()` で確認（カスタムモーダルではない）
 - ポリシー削除のみ `DeletePolicyDialog` (カスタムモーダル) を使用
 
-### 2.8 i18n (国際化)
+### 2.8 アニメーション (framer-motion)
+
+`lib/motion.js` に定義されたプリセット:
+- `fadeInUp`, `fadeIn`, `scaleIn`, `stagger(index)`
+- `prefers-reduced-motion` を尊重
+
+### 2.9 i18n (国際化)
 
 - `i18n/translations.js` に `en` / `ja` の翻訳辞書
 - `i18n/context.jsx` に `I18nProvider` + `useI18n` hook
@@ -114,31 +191,44 @@ new Intl.DateTimeFormat('ja-JP', {
 
 ---
 
-## 3. ユーザーワークスペース (`App.jsx`)
+## 3. ユーザーワークスペース
 
-### 3.1 ライフサイクル
+### 3.1 ワークスペース ライフサイクル
 
 ```
 マウント
-  └─ hydrate()
-       ├─ api.getAuthState() → authState 更新
-       ├─ user あり → loadWorkspace()
-       │    ├─ api.getBootstrap() → conversations, apiTokens
-       │    └─ loadConversation(id) → conversationView
-       └─ user なし → ログイン画面表示
+  └─ loadWorkspace(preferredConversationId?)
+       ├─ api.getBootstrap() → workspaceAtom, authStateAtom 更新
+       └─ loadConversation(id, conversations)
+            └─ api.getConversation() → conversationViewAtom 更新
 
-認証後は 4000ms ごとに loadWorkspace() をポーリング
+リアルタイム更新 (優先: SSE)
+  ├─ SSE接続成功時:
+  │    └─ createSSEConnection(/api/conversations/:id/stream)
+  │         ├─ delta → streamingMessageAtom にテキスト蓄積
+  │         ├─ run.completed / run.cancelled / run.failed
+  │         │    → streamingMessageAtom クリア + loadWorkspace()
+  │         └─ approval.requested → loadWorkspace()
+  │
+  └─ SSEエラー時 (フォールバック: ポーリング):
+       └─ 4000ms ごとに loadWorkspace() を呼び出し
 ```
+
+**SSE接続の管理**:
+- `useSSE` は `useState(true)` のローカルステート
+- SSE エラー発生時に `false` に設定、以降はポーリングにフォールバック
+- SSE の再接続は自動的には行われない（コンポーネント再マウントまで）
+- 会話切替時に SSE は再接続される（`selectedConversationId` が `useEffect` の依存配列に含まれるため）
 
 ### 3.2 画面遷移
 
 ```
-[初期化中] → "Loading workspace..." 表示
-[未認証]   → ログイン画面
-[認証済み] → ワークスペース（3カラムレイアウト）
+[初期化中] → "Authenticating..." 表示 (ProtectedRoute)
+[未認証]   → /login にリダイレクト
+[認証済み] → WorkspaceLayout + WorkspacePage
 ```
 
-### 3.3 ログイン画面
+### 3.3 ログイン画面 (`LoginPage`)
 
 **構成**: 2カラムグリッド (lg以上)
 
@@ -154,7 +244,8 @@ new Intl.DateTimeFormat('ja-JP', {
 **サインインフォーム**:
 - フィールド: `loginName` (text), `password` (password)
 - ボタン: "Sign in" (ローディング中: "Signing in...")
-- 送信: `api.login(loginForm)` → `hydrate()`
+- 送信: `api.login(loginForm)` → ワークスペースに遷移
+- エラー: `toast.error(error.message)`
 
 **管理情報カード**:
 - タイトル: "Admin-managed accounts"
@@ -162,26 +253,21 @@ new Intl.DateTimeFormat('ja-JP', {
 
 ### 3.4 ワークスペース画面
 
-**全体構成**: ヘッダー + 3カラムグリッド (`xl:grid-cols-[300px_minmax(0,1fr)_360px]`)
+**全体構成**: `WorkspaceLayout` (ヘッダー + サイドバー + メインコンテンツ)
 
 #### 3.4.1 ヘッダー
 
 - ブランドラベル: "microHarnessEngine Workspace"
 - ユーザー表示名、@loginName、role
-- ステータスPill: activeRun のステータスまたは "ready"
+- ステータスBadge: activeRun のステータスまたは "ready"
 - ボタン: "New conversation", "Log out"
 
-#### 3.4.2 左カラム: セッション一覧
-
-**カードタイトル**: "Sessions"
+#### 3.4.2 左カラム: 会話サイドバー (`ConversationSidebar`)
 
 **会話が0件**: `EmptyState` コンポーネント
-- タイトル: "No conversations yet"
-- アクションボタン: "Start first chat"
 
-**会話リスト**: 各会話はボタン要素
-- 選択中: primary色背景 + 白テキスト + shadow
-- 非選択: 白背景 + hover効果
+**会話リスト**: 各会話はカード要素
+- 選択中: ハイライト表示
 - 表示情報:
   - `title`
   - `source` (web/slack/discord)
@@ -189,34 +275,54 @@ new Intl.DateTimeFormat('ja-JP', {
   - 最終メッセージ日時 (`lastMessageAt` or `createdAt`)
   - アクティブ実行ステータス (`activeRunStatus`)
 
-**動作**: クリックで `handleSelectConversation(id)` → `loadConversation(id)`
+**動作**: クリックで `selectConversation(id)` → URL 遷移 (`/c/:id`) + 会話読み込み
 
 #### 3.4.3 中央カラム: メッセージスレッド
 
-**カードヘッダー**:
-- タイトル: 選択中会話のtitle or "Conversation"
-- 説明: source + 作成日 or 未選択時のガイド
+##### メッセージ一覧 (`MessageList`)
 
-**メッセージ表示エリア** (スクロール可能):
+- `streamingMessageAtom` を直接参照
+- 自動スクロール: 新メッセージ・ストリーミングテキスト変更時に末尾へスクロール（`SCROLL_THRESHOLD = 50` でユーザーのスクロールアップを検知）
 - 会話未選択: `EmptyState` "No session selected"
 - メッセージ0件: `EmptyState` "This conversation is ready"
-- メッセージ一覧:
-  - `role === 'user'`: 右寄せ、primary色背景、白テキスト、右下の角のみ角丸小
-  - `role === 'assistant'`: 左寄せ、白背景+ボーダー、左下の角のみ角丸小
-  - `role === 'tool'`: 中央表示、dashed amber border、monoフォント
-  - 各メッセージに: ラベル ("You"/"Agent"), contentText, createdAt
+- ストリーミング中: `StreamingBubble` を末尾に表示
 
-**入力エリア** (border-t で区切り):
-- アクティブ実行の表示: status Pill + phase
-- 失敗した実行のエラー: "Last run failed: {error}"
-- テキストエリア: min-height 8rem
-- 送信ボタン: "Send message" (ローディング中: "Sending...")
-- 補足テキスト: "Approvals and automation replies return to the same linked chat surface."
+##### メッセージバブル (`MessageBubble`)
+
+| role | 表示 |
+|------|------|
+| `user` | 右寄せ、primary色背景、白テキスト |
+| `assistant` | 左寄せ、カード背景、`react-markdown` + `remark-gfm` でMarkdownレンダリング |
+| `tool` | 中央表示、dashed border、折りたたみ可能 (`AnimatePresence`) |
+
+- `framer-motion` で fade + slide-up のエントランスアニメーション
+
+##### ストリーミングバブル (`StreamingBubble`)
+
+- assistant バブルと同じ見た目
+- パルスカーソル (`animate-pulse bg-foreground/60`) 付き
+- ストリーミング中のMarkdownをリアルタイムレンダリング
+
+##### ツールメッセージ (`ToolMessage`)
+
+- 折りたたみパネル
+- ツール名をregexで抽出 (`/^\[Tool\]\s+(\S+?)\(/`)
+- `ChevronDown`/`ChevronUp` (lucide-react) アイコン
+- framer-motion で展開/折りたたみアニメーション
+
+##### チャット入力 (`ChatInput`)
+
+- `useWorkspace()` から `sendMessage`, `cancelRun`, `busyKey` を使用
+- フォーム送信 + `Ctrl/Cmd+Enter` ショートカット
+- `Escape` キーでアクティブ Run をキャンセル
+- アクティブ Run 表示: `StatusBadge` + フェーズ情報 + スピナー + 停止ボタン
+- 失敗 Run のエラー表示: destructive 色のバナー
+- 送信ボタン: `isSending` または空テキスト時は disabled
 
 **送信動作**:
-1. `messageDraft.trim()` が空なら何もしない
+1. テキストが空なら何もしない
 2. `selectedConversationId` がなければ新規会話作成
-3. `api.postConversationMessage()` → `setMessageDraft('')` → `loadWorkspace()`
+3. `sendMessage(text)` → テキストクリア
 
 #### 3.4.4 右カラム: サイドバー (3つのカード)
 
@@ -228,11 +334,11 @@ new Intl.DateTimeFormat('ja-JP', {
 **承認0件**: テキスト "No pending approvals in this session."
 
 **承認リスト**: 各承認アイテム
-- ステータスPill + ツール名 (uppercase)
+- ステータスBadge + ツール名 (uppercase)
 - 理由テキスト (`reason`)
 - ツール入力のJSONプレビュー (`JSON.stringify(toolInput, null, 2)`)
 - ボタン: "Approve", "Deny"
-- 動作: `api.decideApproval(id, { decision })` → `loadWorkspace()`
+- 動作: `handleApproval(id, decision)` → `loadWorkspace()`
 
 ##### (B) Automations カード
 
@@ -240,21 +346,21 @@ new Intl.DateTimeFormat('ja-JP', {
 
 **作成フォーム** (常に表示):
 - `name` (Input, placeholder: "Automation name")
-- `instruction` (Textarea, min-height 7rem, placeholder: "What should this automation do?")
+- `instruction` (Textarea, placeholder: "What should this automation do?")
 - `intervalMinutes` (Input type=number, min=5, placeholder: "60")
 - ボタン: "Create"
-- 動作: `api.createAutomation()` → フォームクリア → `loadWorkspace()`
-- 前提: 会話が選択されていない場合はフラッシュエラー
+- 動作: `createAutomation()` → フォームクリア → `loadWorkspace()`
+- 前提: 会話が選択されていない場合は `toast.error()`
 
 **オートメーションリスト**: 各アイテム
 - 名前 + インターバル表示 (`formatInterval`)
-- ステータスPill
+- ステータスBadge
 - 指示文 (`instruction`, whitespace-pre-wrap)
 - 次回実行日時
 - ボタン群:
-  - "Run now": `api.runAutomationNow()`
-  - "Pause"/"Resume": `api.updateAutomationStatus()` (activeならpause、pausedならactive)
-  - "Delete": `window.confirm()` → `api.deleteAutomation()`
+  - "Run now": `runAutomationNow()`
+  - "Pause"/"Resume": `updateAutomationStatus()` (activeならpause、pausedならactive)
+  - "Delete": `window.confirm()` → `deleteAutomation()`
 
 **インターバル表示ルール**:
 - なし → "Manual"
@@ -272,41 +378,40 @@ new Intl.DateTimeFormat('ja-JP', {
 **作成フォーム**:
 - `newTokenName` (Input, 初期値: "Primary integration token")
 - ボタン: "Create"
-- 動作: `api.createToken()` → `setRevealedToken(token)` → `loadWorkspace()`
+- 動作: `createToken(name)` → トークン表示 → `loadWorkspace()`
 
 **トークンリスト**: 各トークン
 - 名前、作成日時、最終使用日時
-- ボタン: "Revoke" (`window.confirm()` → `api.revokeToken()`)
+- ボタン: "Revoke" (`window.confirm()` → `revokeToken()`)
 
 **0件**: テキスト "No personal access tokens yet."
 
 ### 3.5 ログアウト動作
 
 1. `api.logout()`
-2. `revealedToken` クリア
-3. `messageDraft` クリア
-4. `hydrate()` で状態リセット
+2. 状態リセット
+3. `/login` にリダイレクト
 
 ---
 
-## 4. 管理コンソール (`AdminConsole.jsx`)
+## 4. 管理コンソール
 
 ### 4.1 ライフサイクル
 
 ```
 マウント
-  └─ loadAdmin()
-       ├─ api.getAdminAuthState() → authState
-       ├─ 未認証 → data = null
-       └─ 認証済 → api.getAdminBootstrap() → data
+  └─ ProtectedRoute → api.getAdminAuthState()
+       ├─ 未認証 → /admin/login にリダイレクト
+       └─ 認証済 → AdminLayout + ページコンポーネント
+            └─ loadAdmin() → api.getAdminBootstrap() → adminDataAtom
 ```
 
-- ユーザーワークスペースのようなポーリングなし（手動リフレッシュのみ）
+- ポーリングなし（手動リフレッシュのみ）
 - mutation実行後に毎回 `loadAdmin()` でデータ再取得
 
-### 4.2 認証画面
+### 4.2 認証画面 (`AdminLoginPage`)
 
-**構成**: 中央寄せ (`max-w-3xl`) のカード
+**構成**: 中央寄せのカード
 
 **カード内容**:
 - タイトル: "Admin Console"
@@ -316,34 +421,30 @@ new Intl.DateTimeFormat('ja-JP', {
   - `loginName` (初期値: "root")
   - `password`
   - ボタン: "Enter admin console" (`adminEnabled` が false なら disabled)
-- 動作: `api.adminLogin()` → パスワードクリア → `loadAdmin()`
+- 動作: `api.adminLogin()` → パスワードクリア → `/admin` にリダイレクト
+- エラー: `toast.error(error.message)`
 
-### 4.3 メイン画面
+### 4.3 メイン画面 (`AdminLayout`)
 
-**全体構成**: ヘッダー + タブコンテンツ
+**全体構成**: サイドバーナビゲーション + メインコンテンツ (各ページ)
 
-#### ヘッダー
+#### サイドバー
 - ラベル: "Admin Plane"
-- タイトル: "Policy and Operations Console"
-- 説明文
 - ログインユーザー表示: "@{loginName}"
 - ログアウトボタン
-- タブナビゲーション (`SectionTabs`)
+- ナビゲーションリンク (react-router-dom `NavLink`)
 
-#### タブ一覧
+#### ページ一覧
 
 ```
-overview | users | tool-policies | file-policies | protection-rules |
-approvals | automations | tools | skills | mcp-servers
+/admin (overview) | /admin/users | /admin/tool-policies | /admin/file-policies |
+/admin/protection-rules | /admin/approvals | /admin/automations |
+/admin/tools | /admin/skills | /admin/mcp-servers
 ```
-
-- 各タブはボタン要素、capitalize表示
-- 選択中: 暗い背景 (`#17332f`) + 明るいテキスト
-- 非選択: 白系背景 + hover効果
 
 ### 4.4 Overview タブ
 
-**レイアウト**: グリッド (`md:grid-cols-2 xl:grid-cols-3`)
+**レイアウト**: グリッド
 
 **統計カード** (7枚):
 | ラベル | データソース |
@@ -360,15 +461,13 @@ approvals | automations | tools | skills | mcp-servers
 
 ### 4.5 Users タブ
 
-**レイアウト**: 2カラムグリッド (`xl:grid-cols-[1.1fr_0.9fr]`)
+**レイアウト**: 2カラムグリッド
 
 #### 左: ユーザーリスト
 
-**タイトル**: "Users"
-
 **各ユーザーカード**:
 - 表示名 + @loginName
-- ステータスPill群: status, role, authSource, (rootなら "protected root")
+- ステータスBadge群: status, role, authSource, (rootなら "protected root")
 - ツールポリシー選択 (`<select>`): 変更即実行 → `api.adminAssignPolicies()`
 - ファイルポリシー選択 (`<select>`): 変更即実行 → `api.adminAssignPolicies()`
 - パスワード変更行: Input + "Set password" ボタン
@@ -378,289 +477,128 @@ approvals | automations | tools | skills | mcp-servers
 - 削除ボタン: "Delete"
   - rootまたはリモートアカウントは disabled
   - `window.confirm()` → `api.adminDeleteUser()`
-- rootユーザー説明テキスト
-- リモートアカウント説明テキスト
-
-**ポリシー変更の即時反映**:
-- select の `onChange` で直接 `api.adminAssignPolicies()` を呼ぶ
-- もう一方のポリシーIDは現在の値を維持
 
 #### 右: ユーザー作成フォーム
 
-**タイトル**: "Create user"
-
-- `loginName` (Input, placeholder: "login name")
-- `displayName` (Input, placeholder: "display name")
-- `password` (Input type=password, placeholder: "initial password")
-- `role` (select: "user" / "admin")
+- `loginName`, `displayName`, `password`, `role` (select: "user" / "admin")
 - ボタン: "Create user"
 - 動作: `api.adminCreateUser()` → フォームクリア → `loadAdmin()`
 
 ### 4.6 Tool Policies タブ
 
-**レイアウト**: 2カラムグリッド (`xl:grid-cols-[1.05fr_0.95fr]`)
+**レイアウト**: 2カラムグリッド
 
 #### 左: ポリシーリスト
 
-**タイトル**: "Tool policies"
-
 **各ポリシーカード**:
 - 名前 + 説明
-- Pill: "system" or "custom"
+- Badge: "system" or "custom"
 - カスタムのみ: "Edit" ボタン, "Delete" ボタン
-- ツール一覧: 各ツール名 + RiskPill (inline)
+- ツール一覧: 各ツール名 + RiskBadge (inline)
 
 **Edit**: ツールポリシー編集モーダルを開く
 **Delete**: `DeletePolicyDialog` を開く (置換ポリシー選択付き)
 
 #### 右: ポリシー作成フォーム
 
-**タイトル**: "Create tool policy"
-
-- MCP サーバーがある場合: 接続状態凡例 (ready/connecting/failed/disconnected の色説明)
-- `name` (Input)
-- `description` (Input)
-- ツールチェックボックスリスト (max-h 24rem スクロール):
-  - 各ツール: checkbox + 名前 + MCP Badge (sourceがmcpの場合) + 説明 + RiskPill
+- MCP サーバーがある場合: 接続状態凡例
+- `name`, `description`
+- ツールチェックボックスリスト (スクロール):
+  - 各ツール: checkbox + 名前 + MCP Badge + 説明 + RiskBadge
 - ボタン: "Create tool policy"
-
-#### モーダル: ツールポリシー編集
-
-- fixed overlay (`z-50`, 半透明黒背景)
-- カード (max-w-2xl)
-- `name`, `description` の Input
-- ツールチェックボックスリスト (作成フォームと同じ)
-- "Cancel", "Save changes" ボタン
-
-#### モーダル: ツールポリシー削除 (`DeletePolicyDialog`)
-
-- ユーザーが割り当てられている場合: 置換ポリシーの選択必須
-- 割り当てなし: 即削除可能
-- "Cancel", "Delete" ボタン
 
 ### 4.7 File Policies タブ
 
-**レイアウト**: 2カラムグリッド (`xl:grid-cols-[1.05fr_0.95fr]`)
+**レイアウト**: 2カラムグリッド
 
 #### 左: ポリシーリスト
 
-**ヘッダー**: "File policies" + "Create file policy" ボタン (モーダルを開く)
-
 **各ポリシーカード**:
-- 名前 + 説明
-- Pill: "system" / "custom"
+- 名前 + 説明 + Badge: "system" / "custom"
 - カスタムのみ: "Edit policy", "Delete policy" ボタン
 - ルート一覧: `scope:pathType:rootPath` 形式で表示 + "Delete" ボタン
 - ルート追加行 (カスタムのみ):
-  - `rootPath` (Input)
-  - `pathType` (select: "dir" / "file")
-  - "Choose path" ボタン (ファイルブラウザモーダルを開く)
+  - `rootPath` (Input), `pathType` (select: "dir" / "file")
+  - "Choose path" ボタン (ファイルブラウザモーダル)
   - "Add root" ボタン (scope は固定 "absolute")
 
 #### 右: Probe path カード
 
-**タイトル**: "Probe path"
+- パス入力 + "Probe" ボタン → `api.adminProbePath()`
+- 結果: visible/not found, inside/outside workspace, pathType, 解決後パス
 
-- パス入力 (Input)
-- "Probe" ボタン → `api.adminProbePath()`
-- 結果表示:
-  - Pill: "visible to server" / "not found"
-  - Pill: "already inside workspace" / "outside workspace"
-  - Pill: pathType
-  - テキスト: 解決後パス、意味の説明、ワークスペースチェック結果
+#### モーダル
 
-#### モーダル: ファイルポリシー作成
-
-- `name`, `description` の Input
-- "Cancel", "Create file policy" ボタン
-
-#### モーダル: ファイルポリシー編集
-
-- `name`, `description` の Input
-- "Cancel", "Save changes" ボタン
-
-#### モーダル: ファイルブラウザ (`FileBrowser`)
-
-- max-w-5xl, max-h-[90vh]
-- "Close" ボタン
-- `FileBrowser` コンポーネント:
-  - 現在のパス表示
-  - ノードリスト: 各ノード
-    - 名前 + kind Badge + workspace Badge
-    - absolutePath 表示
-    - ディレクトリ: "Open" (サブディレクトリ展開), "Add directory"
-    - ファイル: "Add file"
-  - "Add" で `handleAddRootFromBrowser()`:
-    - workspace内なら scope='workspace' + 相対パス
-    - workspace外なら scope='absolute' + 絶対パス
-
-#### モーダル: ファイルポリシー削除 (`DeletePolicyDialog`)
-
-- ツールポリシー削除と同じパターン
+- ファイルポリシー作成/編集: `name`, `description`
+- ファイルブラウザ (`FileBrowser`): ディレクトリ展開、パス追加
+- ファイルポリシー削除 (`DeletePolicyDialog`)
 
 ### 4.8 Protection Rules タブ
 
-**レイアウト**: 2カラムグリッド (`xl:grid-cols-[1.1fr_0.9fr]`)
+**レイアウト**: 2カラムグリッド
 
 #### 左: ルールリスト
 
-**タイトル**: "Protection rules"
-
-**注意バナー** (amber):
-- ワークスペース相対パスに適用。外部パスは `**` glob でカバー。
-
-**各ルールカード**:
-- パターン (monoフォント) + note
-- Pill群: patternType, scope (systemのみ), enabled状態 ("deny"/"disabled")
-- "Enable"/"Disable" ボタン → `api.adminToggleProtectionRule()`
-- "Delete" ボタン (systemでないもののみ) → `window.confirm()` → `api.adminDeleteProtectionRule()`
+- 注意バナー: ワークスペース相対パスに適用
+- 各ルール: パターン + note + Badge群 (patternType, scope, enabled状態)
+- "Enable"/"Disable", "Delete" ボタン
 
 #### 右上: ルール作成カード
 
-**タイトル**: "Add protection rule"
-
-- `kind` (select):
-  - "File (exact match)" = `path`
-  - "Folder (directory tree)" = `dir`
-  - "Pattern (wildcard)" = `glob`
-- `pattern` (Input, placeholderがkindに応じて変化)
-- 説明テキスト
+- `kind` (select: path/dir/glob), `pattern`
 - ボタン: "Create protection rule"
 
 #### 右下: パス検査カード
 
-**タイトル**: "Inspect path"
-
-- パス入力 (Input, placeholder: "e.g. .env or src/secrets.json")
-- "Inspect" ボタン → `api.adminInspectProtectionPath()`
-- 結果表示:
-  - パス (monoフォント)
-  - Pill: "Protected" (denied色) / "Not protected" (active色)
-  - マッチしたルールのパターン (あれば)
+- パス入力 + "Inspect" ボタン
+- 結果: "Protected" / "Not protected" + マッチルール
 
 ### 4.9 Approvals タブ
 
-**タイトル**: "Approvals"
-**説明**: "Global queue for runs that are waiting on a human decision."
-
-**承認リスト**: 各承認アイテム
-- Pill(status) + toolName + 日時
-- 理由テキスト
-- ツール入力JSON (暗い背景のプレビュー)
+- 承認リスト: Badge(status) + toolName + 日時 + 理由 + JSON入力
 - "Approve", "Deny" ボタン → `api.adminDecideApproval()`
-
-**0件**: "No pending approvals."
+- 0件: "No pending approvals."
 
 ### 4.10 Automations タブ
 
-**タイトル**: "Automations"
-**説明**: "Created by chat. Admin can inspect, pause, or delete in emergencies."
-
-**リスト**: 各オートメーション
-- 名前 + オーナーID + 次回実行日時
-- ステータスPill
-- 指示文 (whitespace-pre-wrap)
-- "Pause" ボタン → `api.adminPauseAutomation()` (pauseのみ)
-- "Delete" ボタン → `api.adminDeleteAutomation()`
-
-**0件**: "No active automations."
+- リスト: 名前 + オーナーID + 次回実行 + ステータスBadge + 指示文
+- "Pause" → `api.adminPauseAutomation()`
+- "Delete" → `api.adminDeleteAutomation()`
+- 0件: "No active automations."
 
 ### 4.11 Tools タブ
 
-**タイトル**: "Tool catalog"
-**説明**: "Reference list for building tool policies."
-
-MCP接続状態凡例 (MCPサーバーがある場合)
-
-**ツールリスト**: 各ツール
-- 名前 + McpBadge (sourceがmcpの場合)
-- McpStatusPill (MCPツールのみ: ready/connecting/failed/disconnected)
-- RiskPill
-- 説明
-- input_schema の JSON プレビュー (暗い背景、整形済み)
+- MCP接続状態凡例
+- 各ツール: 名前 + McpBadge + McpStatusBadge + RiskBadge + 説明 + input_schema JSON
 
 ### 4.12 Skills タブ
 
-**レイアウト**: 2カラムグリッド (`xl:grid-cols-[1.1fr_0.9fr]`)
+**レイアウト**: 2カラムグリッド
 
 #### 左: スキルリスト
-
-**タイトル**: "Skills"
-
-**各スキルカード**:
-- 名前 + 説明
-- "Edit" ボタン → インライン編集展開
-- "Delete" ボタン → `window.confirm()` → `api.adminDeleteSkill()`
-
-**インライン編集** (編集中のスキルのカード内に展開):
-- `description` (Input)
-- `prompt` (Textarea, min-height 12rem)
-- "Save" → `api.adminUpdateSkill()`, "Cancel"
+- 各スキル: 名前 + 説明 + "Edit"/"Delete" ボタン
+- インライン編集: `description`, `prompt` (Textarea)
 
 #### 右: スキル作成カード
-
-**タイトル**: "Create skill"
-**説明**: "Name must be lowercase letters, numbers, and underscores only."
-
-- `name` (Input, placeholder: "e.g. code_review")
-- `description` (Input)
-- `prompt` (Textarea, min-height 14rem)
+- `name`, `description`, `prompt`
 - ボタン: "Create skill"
 
 ### 4.13 MCP Servers タブ
 
-**レイアウト**: 2カラムグリッド (`xl:grid-cols-[1.1fr_0.9fr]`)
+**レイアウト**: 2カラムグリッド
 
 #### 左: サーバーリスト
 
-**タイトル**: "MCP Servers"
-
-**各サーバーカード**:
-- 名前 + プロトコルPill (http=青, stdio=紫)
-- 接続詳細: httpならURL、stdioならcommand + args
-- 接続状態Pill + ツール数
-- 失敗時のエラー表示 (rose背景)
-- ボタン: "Edit"/"Cancel", "Reconnect", "Delete"
-
-**インライン編集** (展開):
-- `mode` (select: stdio/http)
-- stdioモード: command, args (カンマ区切り), env (KeyValueEditor)
-- httpモード: url, headers (KeyValueEditor)
-- "Save changes" ボタン
-
-**Reconnect動作**:
-1. `api.adminReconnectMcpServer()`
-2. `loadAdmin()` でデータ更新
-3. `pollUntilMcpSettled()`: 2秒間隔、最大8回ポーリング
-   - state が 'ready' または 'failed' になるまで
+- 各サーバー: 名前 + プロトコルBadge + 接続詳細 + 状態Badge + ツール数
+- インライン編集 + "Reconnect" + "Delete" ボタン
+- Reconnect後のポーリング: 2秒間隔、最大8回
 
 #### 右: サーバー追加カード
 
-**タイトル**: "Add MCP server"
-
-- `name` (Input)
-- `mode` (select: "stdio (local process)" / "http (remote server)")
-- stdio: `command`, `args` (カンマ区切り), `env` (KeyValueEditor, secret用)
-- http: `url`, `headers` (KeyValueEditor, secret用)
-- ボタン: "Add server" (ローディング中: "Connecting...")
-
-**KeyValueEditor** コンポーネント:
-- key-value ペアの配列を管理
-- 各行: key Input + value Input + 削除ボタン (×)
-- 追加ボタン: "+ Add"
-- valuePlaceholder が "Value (secret)" の場合は type=password
-
-**Config構築ロジック**:
-```javascript
-// stdio
-config = { command }
-if (args) config.args = args.split(',').map(s => s.trim()).filter(Boolean)
-if (env) config.env = kvPairsToObject(envPairs)
-
-// http
-config = { url }
-if (headers) config.headers = kvPairsToObject(headerPairs)
-```
+- `name`, `mode` (stdio/http)
+- stdio: `command`, `args`, `env` (KeyValueEditor)
+- http: `url`, `headers` (KeyValueEditor)
+- ボタン: "Add server"
 
 ---
 
@@ -689,7 +627,6 @@ sizes: default | sm
 ### 5.4 Textarea
 
 - 複数行入力
-- min-height: 8rem
 - Input と同じフォーカススタイル
 
 ### 5.5 Label
@@ -704,7 +641,7 @@ tones: default | success | warn | danger
 
 ### 5.7 Table / THead / TBody / TR / TH / TD
 
-- テーブルコンポーネント (現在未使用だが存在)
+- テーブルコンポーネント
 
 ### 5.8 DeletePolicyDialog
 
@@ -716,7 +653,6 @@ tones: default | success | warn | danger
 - `replacementRequired`: ユーザーが割り当てられているか
 - `replacementLabel`: 追加説明テキスト
 - `onChange(policyId)`, `onCancel()`, `onConfirm()`
-- `t(key)`: 翻訳関数
 
 ### 5.9 FileBrowser
 
@@ -724,21 +660,8 @@ tones: default | success | warn | danger
 - `data`: `{ currentPath, nodes[] }`
 - `onBrowse(targetPath)`: ディレクトリ展開時のコールバック
 - `onAddRoot(absolutePath, pathType)`: パス追加時のコールバック
-- `t(key)`: 翻訳関数
 
-### 5.10 ToolCatalogExplorer
-
-**Props**:
-- `plugins`: プラグイン配列 `[{ name, description, tools[] }]`
-- `selectedTools`: 選択済みツール名のSet (null可)
-- `onToggleTool(toolName)`: ツール切替コールバック
-- `t(key)`: 翻訳関数
-
-**機能**: `<details>` 要素で折りたたみ、ツールの引数スキーマ表示
-
-(注: 現在 AdminConsole ではインラインのチェックボックスリストを使用しており、ToolCatalogExplorer は直接使用されていない)
-
-### 5.11 EmptyState
+### 5.10 EmptyState
 
 **Props**: `title`, `description`, `action` (JSX)
 
@@ -774,14 +697,21 @@ tones: default | success | warn | danger
 | GET | `/api/conversations/:id` | 不要 | 会話詳細取得 |
 | POST | `/api/conversations/:id/messages` | 要 | メッセージ送信 (202 async) |
 
-### 6.4 承認系
+### 6.4 SSE・キャンセル
+
+| メソッド | パス | CSRF | 用途 |
+|----------|------|------|------|
+| GET | `/api/conversations/:id/stream` | 不要 | SSE ストリーミング (text/event-stream) |
+| POST | `/api/runs/:runId/cancel` | 要 | Run キャンセル |
+
+### 6.5 承認系
 
 | メソッド | パス | CSRF | 用途 |
 |----------|------|------|------|
 | POST | `/api/approvals/:id/decision` | 要 | ユーザー承認/拒否 |
 | POST | `/api/admin/approvals/:id/decision` | 要 | 管理者承認/拒否 |
 
-### 6.5 オートメーション系
+### 6.6 オートメーション系
 
 | メソッド | パス | CSRF | 用途 |
 |----------|------|------|------|
@@ -792,14 +722,14 @@ tones: default | success | warn | danger
 | PATCH | `/api/admin/automations/:id` | 要 | 管理者一時停止 |
 | DELETE | `/api/admin/automations/:id` | 要 | 管理者削除 |
 
-### 6.6 APIトークン系
+### 6.7 APIトークン系
 
 | メソッド | パス | CSRF | 用途 |
 |----------|------|------|------|
 | POST | `/api/me/tokens` | 要 | トークン作成 |
 | DELETE | `/api/me/tokens/:id` | 要 | トークン失効 |
 
-### 6.7 ユーザー管理系
+### 6.8 ユーザー管理系
 
 | メソッド | パス | CSRF | 用途 |
 |----------|------|------|------|
@@ -809,7 +739,7 @@ tones: default | success | warn | danger
 | POST | `/api/admin/users/:id/password` | 要 | パスワード設定 |
 | PATCH | `/api/admin/users/:id/policies` | 要 | ポリシー割当 |
 
-### 6.8 ツールポリシー系
+### 6.9 ツールポリシー系
 
 | メソッド | パス | CSRF | 用途 |
 |----------|------|------|------|
@@ -817,7 +747,7 @@ tones: default | success | warn | danger
 | PATCH | `/api/admin/tool-policies/:id` | 要 | 更新 |
 | DELETE | `/api/admin/tool-policies/:id` | 要 | 削除 (body: replacementPolicyId) |
 
-### 6.9 ファイルポリシー系
+### 6.10 ファイルポリシー系
 
 | メソッド | パス | CSRF | 用途 |
 |----------|------|------|------|
@@ -827,14 +757,14 @@ tones: default | success | warn | danger
 | POST | `/api/admin/file-policies/:id/roots` | 要 | ルート追加 |
 | DELETE | `/api/admin/file-policies/:id/roots/:rootId` | 要 | ルート削除 |
 
-### 6.10 ファイルシステム系
+### 6.11 ファイルシステム系
 
 | メソッド | パス | CSRF | 用途 |
 |----------|------|------|------|
 | GET | `/api/admin/fs/probe?path=` | 不要 | パス検査 |
 | GET | `/api/admin/fs/browse?path=` | 不要 | ディレクトリ閲覧 |
 
-### 6.11 保護ルール系
+### 6.12 保護ルール系
 
 | メソッド | パス | CSRF | 用途 |
 |----------|------|------|------|
@@ -843,7 +773,7 @@ tones: default | success | warn | danger
 | DELETE | `/api/admin/protection-rules/:id` | 要 | 削除 |
 | POST | `/api/admin/protection-rules/inspect` | 要 | パス保護検査 |
 
-### 6.12 スキル系
+### 6.13 スキル系
 
 | メソッド | パス | CSRF | 用途 |
 |----------|------|------|------|
@@ -851,7 +781,7 @@ tones: default | success | warn | danger
 | PATCH | `/api/admin/skills/:name` | 要 | 更新 |
 | DELETE | `/api/admin/skills/:name` | 要 | 削除 |
 
-### 6.13 MCPサーバー系
+### 6.14 MCPサーバー系
 
 | メソッド | パス | CSRF | 用途 |
 |----------|------|------|------|
@@ -912,7 +842,16 @@ tones: default | success | warn | danger
 }
 ```
 
-### 7.5 admin bootstrap data
+### 7.5 streamingMessage
+
+```typescript
+{
+  text: string    // SSE delta イベントで蓄積されたテキスト
+  runId: string   // 関連する Run ID
+} | null
+```
+
+### 7.6 admin bootstrap data
 
 ```typescript
 {
@@ -975,6 +914,8 @@ tones: default | success | warn | danger
 UI作り直しの際に**変更してはいけない**ファイル:
 
 - `src/admin-web/src/lib/api.js` — API通信レイヤー (そのまま使用)
+- `src/admin-web/src/lib/axios.js` — axios インスタンス + インターセプタ
+- `src/admin-web/src/lib/sse.js` — SSE クライアント (そのまま使用)
 - `src/admin-web/src/lib/utils.js` — `cn()` ユーティリティ
 - `src/admin-web/src/i18n/` — 翻訳ファイル (今後活用可能)
 - バックエンドの全コード (`src/` 内の `admin-web/` 以外)
@@ -985,9 +926,8 @@ UI作り直しの際に**変更してはいけない**ファイル:
 
 > これらは現在の実装の特性であり、リビルド時に改善してもよい点。
 
-1. **react-router-dom が未使用**: インストール済みだが `window.location.pathname` で代用。ルーティング導入で管理タブのURL化が可能
-2. **i18n が未活用**: context/translations は存在するが App.jsx/AdminConsole.jsx では直接英語テキスト
-3. **ポーリングベース**: 4秒ごとのフルリフレッシュ。WebSocket/SSE で最適化可能
-4. **巨大なモノリスコンポーネント**: AdminConsole.jsx が1559行。タブごとの分割が望ましい
-5. **フォームバリデーション**: クライアント側のバリデーションなし (すべてサーバー依存)
-6. **select要素**: ネイティブ `<select>` を使用。カスタムドロップダウンに置換可能
+1. **i18n が未活用**: context/translations は存在するが各ページでは直接英語テキスト
+2. **巨大なカスタムフック**: `useWorkspace.js` が多くの責務を持つ。SSE管理、API呼び出し、状態操作の分離が望ましい
+3. **フォームバリデーション**: クライアント側のバリデーションなし (すべてサーバー依存)
+4. **select要素**: ネイティブ `<select>` を使用。カスタムドロップダウンに置換可能
+5. **SSE 再接続**: エラー時に自動再接続を行わず、ポーリングにフォールバック。指数バックオフ付き再接続の導入余地あり

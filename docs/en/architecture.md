@@ -23,6 +23,7 @@ graph TB
             HTTP[HTTP Server<br/>Node.js built-in http]
             STATIC[Static File Server<br/>admin-web/dist]
             CORS[CORS Middleware]
+            SSE_EP[SSE Endpoint<br/>/api/conversations/:id/stream]
         end
 
         subgraph "Authentication"
@@ -33,7 +34,7 @@ graph TB
 
         subgraph "Core Engine"
             APP[MicroHarnessEngineApp<br/>Application Engine]
-            LOOP[Agent Loop<br/>LLM⇔Tool Loop]
+            LOOP[Agent Loop<br/>async *runLoop]
             POLICY_SVC[PolicyService<br/>Policy Management & Enforcement]
         end
 
@@ -70,10 +71,11 @@ graph TB
         DB[(SQLite<br/>better-sqlite3<br/>WAL mode)]
     end
 
-    WEB --> HTTP
-    SLACK --> HTTP
-    DISCORD --> HTTP
-    PAT --> HTTP
+    WEB -->|Cookie Session| HTTP
+    WEB <-.->|SSE Stream| SSE_EP
+    SLACK -->|Webhook + Signature Verification| HTTP
+    DISCORD -->|Webhook + Signature Verification| HTTP
+    PAT -->|Bearer Token| HTTP
 
     HTTP --> CORS --> AUTH_SVC
     HTTP --> CORS --> ADMIN_AUTH
@@ -112,6 +114,8 @@ graph TB
     APP --> DB
     POLICY_SVC --> DB
     PROTECT_SVC --> DB
+
+    SSE_EP -.->|runEventListeners| APP
 ```
 
 ---
@@ -128,6 +132,8 @@ Request
   |     |-- Apply CORS headers
   |     |-- OPTIONS -> 204 (preflight)
   |     |-- Actor resolution (Bearer token / Session cookie)
+  |     |-- GET /api/conversations/:id/stream -> SSE streaming
+  |     |-- POST /api/runs/:runId/cancel -> Cancel
   |     +-- Route dispatch
   +-- Other -> Static File Server (SPA)
         +-- Fallback to admin-web/dist/index.html
@@ -146,6 +152,25 @@ The center of the system. It coordinates the following:
 - Delivering responses to channel adapters
 - MCP server management
 - Skill management
+- SSE event listener management
+- Run cancel control
+
+#### SSE Listener Management Methods
+
+| Method | Description |
+|---|---|
+| `addRunEventListener(conversationId, listener)` | Register an SSE listener |
+| `removeRunEventListener(conversationId, listener)` | Remove an SSE listener |
+| `emitRunEvent(runId, event)` | Deliver event to all listeners |
+
+#### Cancel Control Methods
+
+| Method | Description |
+|---|---|
+| `cancelRun({ runId, actor })` | Cancel a Run, abort the AbortController |
+| `isRunCancelled(runId)` | Check if a Run is cancelled |
+| `getAbortSignal(runId)` | Get the AbortSignal for a Run |
+| `finalizeCancelledRun(runId, loopMessages, conversation)` | Post-cancellation cleanup (partial text saving, etc.) |
 
 ### Authentication Separation
 
@@ -211,9 +236,12 @@ Provider Interface:
   |-- displayName: string
   |-- getModel(): string
   |-- capabilities: { toolCalling, parallelToolCalls, ... }
-  +-- generate({ messages, systemPrompt, toolDefinitions, maxTokens })
-        -> { assistantMessage, assistantText, stopReason }
+  +-- async *generate({ messages, systemPrompt, toolDefinitions, maxTokens, signal })
+        |-- yield { type: 'text_delta', text }  (streaming)
+        +-- return { assistantMessage, assistantText, stopReason }
 ```
+
+`generate()` is implemented as an async generator, yielding text deltas during streaming and returning the normalized response upon completion. The `signal` parameter (`AbortSignal`) enables immediate interruption on cancellation.
 
 Internal message format is unified through a normalization layer (`common.js`):
 
@@ -230,8 +258,64 @@ Normalized message format:
 
 Each provider's `generate()`:
 1. Converts normalized messages to provider-specific format
-2. Makes API call
-3. Converts response to normalized format
+2. Makes streaming API call (yielding text deltas)
+3. Converts response to normalized format and returns
+
+---
+
+## SSE Streaming
+
+### Communication Flow
+
+```mermaid
+sequenceDiagram
+    participant Browser as Browser (lib/sse.js)
+    participant Server as HTTP Server
+    participant App as MicroHarnessEngineApp
+    participant Loop as runLoop()
+
+    Browser->>Server: GET /api/conversations/:id/stream
+    Server->>Server: Set response headers<br/>(text/event-stream)
+    Server-->>Browser: : connected
+
+    Server->>App: addRunEventListener(conversationId, listener)
+
+    loop Heartbeat (every 30 seconds)
+        Server-->>Browser: : heartbeat
+    end
+
+    Loop->>App: emitRunEvent(runId, event)
+    App->>Server: listener(event)
+    Server-->>Browser: event: delta\ndata: {"type":"text_delta","text":"..."}
+
+    Browser->>Browser: Close connection
+    Server->>App: removeRunEventListener(conversationId, listener)
+```
+
+### Server-Side SSE Response
+
+| Header | Value |
+|---|---|
+| `Content-Type` | `text/event-stream` |
+| `Cache-Control` | `no-cache` |
+| `Connection` | `keep-alive` |
+| `X-Accel-Buffering` | `no` |
+
+A `: connected\n\n` comment is sent on initial connection. A `: heartbeat\n\n` comment is sent every 30 seconds to keep the connection alive.
+
+### Client-Side SSE (lib/sse.js)
+
+A custom implementation using `fetch()` + `ReadableStream` rather than the `EventSource` API:
+
+- `credentials: 'include'` for cookie authentication
+- Response body is read chunk-by-chunk via `getReader()`
+- Event boundaries split on `\n\n`, parsing `event:` and `data:` lines
+- Comment lines starting with `:` (heartbeats) are ignored
+- Returns `{ close() }`, which disconnects via `AbortController.abort()`
+
+### Fallback Specification
+
+When an SSE connection error occurs, it falls back to 4-second interval polling (`loadWorkspace()`). SSE reconnection is not performed automatically (until component remount).
 
 ---
 
@@ -287,7 +371,7 @@ src/
 |-- index.js                      # Entry point (startApiServer)
 |-- cli-root.js                   # CLI entry point
 |-- http/
-|   +-- server.js                 # HTTP server + all API route definitions
+|   +-- server.js                 # HTTP server + all API route definitions + SSE
 |-- core/
 |   |-- app.js                    # MicroHarnessEngineApp class
 |   |-- config.js                 # Environment variable-based configuration
@@ -302,7 +386,7 @@ src/
 |   |-- systemDefaults.js         # System default constants
 |   |-- adapters/
 |   |   |-- index.js              # Adapter registration
-|   |   |-- web.js                # Web (stub, delivered via SSE/WS)
+|   |   |-- web.js                # Web (stub, delivered via SSE)
 |   |   |-- slack.js              # Slack Events API + Block Kit
 |   |   +-- discord.js            # Discord Interactions
 |   |-- tools/
@@ -330,5 +414,31 @@ src/
 |   |-- transport.js              # StdioTransport / HttpTransport
 |   |-- config.js                 # mcp.json read/write
 |   +-- protocol.js               # MCP protocol helpers
-+-- admin-web/                    # React + Vite admin panel SPA
++-- admin-web/                    # React + Vite SPA
+    +-- src/
+        |-- lib/
+        |   |-- api.js            # axios-based API client
+        |   |-- axios.js          # axios instance + interceptors
+        |   |-- sse.js            # SSE client (fetch + ReadableStream)
+        |   |-- motion.js         # framer-motion presets
+        |   |-- navigateRef.js    # navigate bridge for non-React code
+        |   +-- utils.js          # cn() utility
+        |-- stores/
+        |   |-- workspace.js      # workspaceAtom, selectedConversationIdAtom, etc.
+        |   |-- ui.js             # themeAtom, workspaceBusyKeyAtom, etc.
+        |   |-- auth.js           # authStateAtom, adminAuthStateAtom
+        |   +-- admin.js          # adminDataAtom
+        |-- hooks/
+        |   |-- useWorkspace.js   # SSE connection, polling, all workspace operations
+        |   |-- useAuth.js        # User authentication
+        |   |-- useAdmin.js       # Admin operations
+        |   +-- useTheme.js       # Theme toggle
+        +-- components/
+            |-- chat/
+            |   |-- MessageList.jsx      # Message list + StreamingBubble
+            |   |-- MessageBubble.jsx    # Message display + ToolMessage
+            |   |-- ChatInput.jsx        # Input form + Run status display
+            |   +-- ConversationSidebar.jsx  # Conversation list sidebar
+            +-- shared/
+                +-- ProtectedRoute.jsx   # Auth guard
 ```

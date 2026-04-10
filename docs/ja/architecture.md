@@ -23,6 +23,7 @@ graph TB
             HTTP[HTTP Server<br/>Node.js built-in http]
             STATIC[Static File Server<br/>admin-web/dist]
             CORS[CORS Middleware]
+            SSE_EP[SSE Endpoint<br/>/api/conversations/:id/stream]
         end
 
         subgraph "Authentication"
@@ -33,7 +34,7 @@ graph TB
 
         subgraph "Core Engine"
             APP[MicroHarnessEngineApp<br/>アプリケーションエンジン]
-            LOOP[Agent Loop<br/>LLM⇔Tool ループ]
+            LOOP[Agent Loop<br/>async *runLoop]
             POLICY_SVC[PolicyService<br/>ポリシー管理・適用]
         end
 
@@ -70,10 +71,11 @@ graph TB
         DB[(SQLite<br/>better-sqlite3<br/>WAL mode)]
     end
 
-    WEB --> HTTP
-    SLACK --> HTTP
-    DISCORD --> HTTP
-    PAT --> HTTP
+    WEB -->|Cookie Session| HTTP
+    WEB <-.->|SSE ストリーム| SSE_EP
+    SLACK -->|Webhook + 署名検証| HTTP
+    DISCORD -->|Webhook + 署名検証| HTTP
+    PAT -->|Bearer Token| HTTP
 
     HTTP --> CORS --> AUTH_SVC
     HTTP --> CORS --> ADMIN_AUTH
@@ -112,6 +114,8 @@ graph TB
     APP --> DB
     POLICY_SVC --> DB
     PROTECT_SVC --> DB
+
+    SSE_EP -.->|runEventListeners| APP
 ```
 
 ---
@@ -128,6 +132,8 @@ graph TB
   │     ├── CORS ヘッダ適用
   │     ├── OPTIONS → 204 (preflight)
   │     ├── Actor 解決 (Bearer token / Session cookie)
+  │     ├── GET /api/conversations/:id/stream → SSE ストリーミング
+  │     ├── POST /api/runs/:runId/cancel → キャンセル
   │     └── ルートディスパッチ
   └── その他 → Static File Server (SPA)
         └── admin-web/dist/index.html へフォールバック
@@ -146,6 +152,25 @@ graph TB
 - チャネルアダプタへの応答配信
 - MCP サーバー管理
 - スキル管理
+- SSE イベントリスナー管理
+- Run キャンセル制御
+
+#### SSE リスナー管理メソッド
+
+| メソッド | 説明 |
+|---|---|
+| `addRunEventListener(conversationId, listener)` | SSE リスナーを登録 |
+| `removeRunEventListener(conversationId, listener)` | SSE リスナーを解除 |
+| `emitRunEvent(runId, event)` | 全リスナーにイベントを配信 |
+
+#### キャンセル制御メソッド
+
+| メソッド | 説明 |
+|---|---|
+| `cancelRun({ runId, actor })` | Run をキャンセル、AbortController を abort |
+| `isRunCancelled(runId)` | Run がキャンセル済みかチェック |
+| `getAbortSignal(runId)` | Run の AbortSignal を取得 |
+| `finalizeCancelledRun(runId, loopMessages, conversation)` | キャンセル後処理 (部分テキスト保存等) |
 
 ### 認証の分離
 
@@ -211,9 +236,12 @@ Provider Interface:
   ├── displayName: string
   ├── getModel(): string
   ├── capabilities: { toolCalling, parallelToolCalls, ... }
-  └── generate({ messages, systemPrompt, toolDefinitions, maxTokens })
-        → { assistantMessage, assistantText, stopReason }
+  └── async *generate({ messages, systemPrompt, toolDefinitions, maxTokens, signal })
+        ├── yield { type: 'text_delta', text }  (ストリーミング)
+        └── return { assistantMessage, assistantText, stopReason }
 ```
+
+`generate()` は async generator として実装され、ストリーミング中はテキストデルタを yield し、完了時に正規化されたレスポンスを return します。`signal` パラメータ (`AbortSignal`) によりキャンセル時の即時中断が可能です。
 
 内部メッセージ形式は正規化レイヤー (`common.js`) で統一されています:
 
@@ -230,8 +258,64 @@ Provider Interface:
 
 各プロバイダの `generate()` は:
 1. 正規化メッセージ → プロバイダ固有形式に変換
-2. API呼び出し
-3. レスポンス → 正規化形式に変換
+2. ストリーミングAPI呼び出し（テキストデルタを yield）
+3. レスポンス → 正規化形式に変換して return
+
+---
+
+## SSE ストリーミング
+
+### 通信フロー
+
+```mermaid
+sequenceDiagram
+    participant Browser as ブラウザ (lib/sse.js)
+    participant Server as HTTP Server
+    participant App as MicroHarnessEngineApp
+    participant Loop as runLoop()
+
+    Browser->>Server: GET /api/conversations/:id/stream
+    Server->>Server: レスポンスヘッダ設定<br/>(text/event-stream)
+    Server-->>Browser: : connected
+
+    Server->>App: addRunEventListener(conversationId, listener)
+
+    loop ハートビート (30秒間隔)
+        Server-->>Browser: : heartbeat
+    end
+
+    Loop->>App: emitRunEvent(runId, event)
+    App->>Server: listener(event)
+    Server-->>Browser: event: delta\ndata: {"type":"text_delta","text":"..."}
+
+    Browser->>Browser: 接続クローズ
+    Server->>App: removeRunEventListener(conversationId, listener)
+```
+
+### サーバー側 SSE レスポンス
+
+| ヘッダ | 値 |
+|---|---|
+| `Content-Type` | `text/event-stream` |
+| `Cache-Control` | `no-cache` |
+| `Connection` | `keep-alive` |
+| `X-Accel-Buffering` | `no` |
+
+初期接続時に `: connected\n\n` コメントを送信します。30秒間隔で `: heartbeat\n\n` コメントを送信し、接続を維持します。
+
+### クライアント側 SSE (lib/sse.js)
+
+`EventSource` API ではなく `fetch()` + `ReadableStream` による独自実装です:
+
+- `credentials: 'include'` で Cookie 認証
+- レスポンスボディを `getReader()` でチャンク単位に読み取り
+- `\n\n` でイベント境界を分割、`event:` と `data:` 行を解析
+- `:` で始まるコメント行（ハートビート）は無視
+- `{ close() }` を返し、`AbortController.abort()` で接続を切断
+
+### フォールバック仕様
+
+SSE 接続でエラーが発生した場合、4秒間隔のポーリング (`loadWorkspace()`) にフォールバックします。SSE の再接続は自動的には行われません（コンポーネント再マウントまで）。
 
 ---
 
@@ -287,7 +371,7 @@ src/
 ├── index.js                      # エントリポイント (startApiServer)
 ├── cli-root.js                   # CLI エントリポイント
 ├── http/
-│   └── server.js                 # HTTPサーバー + 全APIルート定義
+│   └── server.js                 # HTTPサーバー + 全APIルート定義 + SSE
 ├── core/
 │   ├── app.js                    # MicroHarnessEngineApp クラス
 │   ├── config.js                 # 環境変数ベースの設定
@@ -302,7 +386,7 @@ src/
 │   ├── systemDefaults.js         # システムデフォルト定数
 │   ├── adapters/
 │   │   ├── index.js              # アダプタ登録
-│   │   ├── web.js                # Web (stub, SSE/WSで配信)
+│   │   ├── web.js                # Web (stub, SSEで配信)
 │   │   ├── slack.js              # Slack Events API + Block Kit
 │   │   └── discord.js            # Discord Interactions
 │   ├── tools/
@@ -330,5 +414,31 @@ src/
 │   ├── transport.js              # StdioTransport / HttpTransport
 │   ├── config.js                 # mcp.json 読み書き
 │   └── protocol.js               # MCP プロトコルヘルパー
-└── admin-web/                    # React + Vite 管理画面 SPA
+└── admin-web/                    # React + Vite SPA
+    └── src/
+        ├── lib/
+        │   ├── api.js            # axios ベースの API クライアント
+        │   ├── axios.js          # axios インスタンス + インターセプタ
+        │   ├── sse.js            # SSE クライアント (fetch + ReadableStream)
+        │   ├── motion.js         # framer-motion プリセット
+        │   ├── navigateRef.js    # 非React コードからの navigate ブリッジ
+        │   └── utils.js          # cn() ユーティリティ
+        ├── stores/
+        │   ├── workspace.js      # workspaceAtom, selectedConversationIdAtom 等
+        │   ├── ui.js             # themeAtom, workspaceBusyKeyAtom 等
+        │   ├── auth.js           # authStateAtom, adminAuthStateAtom
+        │   └── admin.js          # adminDataAtom
+        ├── hooks/
+        │   ├── useWorkspace.js   # SSE接続・ポーリング・全ワークスペース操作
+        │   ├── useAuth.js        # ユーザー認証
+        │   ├── useAdmin.js       # 管理者操作
+        │   └── useTheme.js       # テーマ切替
+        └── components/
+            ├── chat/
+            │   ├── MessageList.jsx      # メッセージ一覧 + StreamingBubble
+            │   ├── MessageBubble.jsx    # メッセージ表示 + ToolMessage
+            │   ├── ChatInput.jsx        # 入力フォーム + Run状態表示
+            │   └── ConversationSidebar.jsx  # 会話一覧サイドバー
+            └── shared/
+                └── ProtectedRoute.jsx   # 認証ガード
 ```

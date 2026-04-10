@@ -29,7 +29,8 @@ It is not required when using Bearer Token authentication.
 
 ### Response Format
 
-All responses are `application/json`.
+REST endpoints respond with `application/json`.
+SSE endpoints respond with `text/event-stream` (see below).
 
 ### Error Response
 
@@ -165,6 +166,62 @@ Conversation details. Includes messages, approval requests, automations, and act
 ```
 
 The agent loop is started asynchronously.
+
+### `GET /api/conversations/:conversationId/stream`
+
+SSE (Server-Sent Events) streaming endpoint. Receives real-time agent events associated with a conversation.
+
+**Response Headers**:
+
+| Header | Value |
+|---|---|
+| `Content-Type` | `text/event-stream` |
+| `Cache-Control` | `no-cache` |
+| `Connection` | `keep-alive` |
+| `X-Accel-Buffering` | `no` |
+
+**Initial Connection**: Sends a `: connected\n\n` comment
+
+**Heartbeat**: Sends a `: heartbeat\n\n` comment every 30 seconds
+
+**Event Format**:
+
+```
+event: <event type>
+data: <JSON payload>
+
+```
+
+**Event Types**:
+
+| Event | Data | Description |
+|---|---|---|
+| `run.started` | `{ runId, status, phase }` | Run started |
+| `delta` | `{ runId, type: 'text_delta', text }` | LLM streaming text |
+| `tool_call` | `{ runId, name, input }` | Tool call started |
+| `tool_result` | `{ runId, name, output }` | Tool execution result |
+| `approval.requested` | `{ runId, approvalId, toolName }` | Approval request |
+| `run.completed` | `{ runId, status, finalText }` | Run completed normally |
+| `run.cancelled` | `{ runId }` | Run cancelled |
+| `run.failed` | `{ runId, error }` | Run failed |
+
+**Connection Termination**: Listeners are automatically cleaned up on client disconnect.
+
+### `POST /api/runs/:runId/cancel`
+
+**CSRF required** --- Cancels an in-progress Run.
+
+```json
+// Response 200
+{ "ok": true, "data": { "ok": true } }
+```
+
+**Cancellable Statuses**: `queued`, `running`, `recovering`
+
+**Error Conditions**:
+- Run does not exist: `404`
+- Non-cancellable status: `409`
+- Authentication required: `401`
 
 ### `POST /api/approvals/:approvalId/decision`
 
@@ -363,6 +420,13 @@ Fetches all dashboard data at once.
 |---|---|---|---|
 | `POST` | `/api/integrations/slack/events` | Slack signature | Event reception + URL verification |
 | `POST` | `/api/integrations/slack/actions` | Slack signature | Block Kit interactions |
+
+### SSE & Cancel
+
+| Method | Path | CSRF | Description |
+|---|---|---|---|
+| `GET` | `/api/conversations/:conversationId/stream` | No | SSE streaming (text/event-stream) |
+| `POST` | `/api/runs/:runId/cancel` | Yes | Cancel Run |
 
 ### Discord
 

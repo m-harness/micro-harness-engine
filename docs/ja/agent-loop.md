@@ -2,17 +2,18 @@
 
 # Agent Loop
 
-エージェントループの仕組み、承認ワークフロー、自動リカバリ、定期実行の詳細です。
+エージェントループの仕組み、承認ワークフロー、キャンセル制御、自動リカバリ、定期実行の詳細です。
 
 ---
 
 ## ループの全体像
 
-ユーザーのメッセージからアシスタントの最終応答までの処理フローです。
+ユーザーのメッセージからアシスタントの最終応答までの処理フローです。`processRun` は `async *runLoop()` の返すイベントを `for await` で消費し、各イベントを `emitRunEvent` 経由でSSEリスナーに配信します。
 
 ```mermaid
 sequenceDiagram
     participant U as ユーザー
+    participant SSE as SSE (ブラウザ)
     participant APP as App Engine
     participant PS as Policy Service
     participant LLM as LLM Provider
@@ -23,19 +24,31 @@ sequenceDiagram
     U->>APP: メッセージ送信
     APP->>APP: Message 保存
     APP->>APP: Agent Run 作成 (status: queued)
+    APP->>APP: processRun() 開始
 
-    loop Agent Loop
+    loop async *runLoop()
+        APP->>APP: キャンセルチェック (checkpoint 1)
         APP->>PS: 許可ツール定義を取得
         PS-->>APP: フィルタ済みツール定義
-        APP->>LLM: generate(messages, tools)
-        LLM-->>APP: assistantMessage
+        APP->>LLM: async *generate(messages, tools, signal)
+
+        loop ストリーミング
+            LLM-->>APP: yield { type: 'text_delta', text }
+            APP-->>SSE: yield delta イベント
+        end
+
+        LLM-->>APP: return { assistantMessage, stopReason }
+        APP->>APP: キャンセルチェック (checkpoint 2)
 
         alt テキスト応答のみ (tool_calls なし)
             APP->>APP: Message 保存
             APP->>APP: Run 完了 (status: completed)
+            APP-->>SSE: yield run.completed イベント
             APP->>CH: 応答をチャネルへ配信
         else ツール呼び出しあり
             loop 各 tool_call
+                APP-->>SSE: yield tool_call イベント
+                APP->>APP: キャンセルチェック (checkpoint 3)
                 APP->>PS: assertToolAllowed()
                 APP->>TR: execute(toolName, input)
                 TR->>PE: パス保護チェック
@@ -44,13 +57,16 @@ sequenceDiagram
                     TR-->>APP: { approvalRequired: true }
                     APP->>APP: Approval 作成
                     APP->>APP: Run 停止 (waiting_approval)
+                    APP-->>SSE: yield approval.requested イベント
                     APP->>CH: 承認リクエスト送信
                     Note over APP: ループ中断 → 承認待ち
                 else 通常実行
                     TR-->>APP: ツール結果
+                    APP-->>SSE: yield tool_result イベント
                     APP->>APP: ToolCall 記録
                 end
             end
+            APP->>APP: キャンセルチェック (checkpoint 4)
             APP->>APP: ツール結果を messages に追加
             Note over APP: ループ先頭へ戻る
         end
@@ -59,11 +75,53 @@ sequenceDiagram
 
 ---
 
+## Async Generator アーキテクチャ
+
+### データフロー
+
+```
+processRun(runId)
+  │
+  ├─ AbortController 作成・登録
+  ├─ loopMessages 構築 (snapshot or DB)
+  │
+  └─ for await (const event of this.runLoop({...}))
+       │
+       ├─ this.emitRunEvent(runId, event)
+       │     └─ runEventListeners.get(conversationId)
+       │           └─ 各 listener(event)  ← SSE 配信
+       │
+       └─ catch: classifyApiError()
+             ├─ retryable → recovering → processRun 再呼出
+             └─ non-retryable → failed
+```
+
+### `runLoop` が yield するイベント一覧
+
+| イベント種別 | データ | 発生タイミング |
+|---|---|---|
+| `run.started` | `{ runId, status: 'running', phase: 'calling_model' }` | ループ開始直後 |
+| `delta` | `{ runId, type: 'text_delta', text }` | LLMからのストリーミングチャンクごと |
+| `tool_call` | `{ runId, name, input }` | ツール実行開始前 |
+| `tool_result` | `{ runId, name, output }` | ツール実行完了後 |
+| `approval.requested` | `{ runId, approvalId, toolName }` | 承認が必要なツール検出時 |
+| `run.completed` | `{ runId, status: 'completed', finalText }` | ループ正常完了 |
+
+### `processRun` 外から emit されるイベント
+
+| イベント種別 | 発生タイミング |
+|---|---|
+| `run.cancelled` | `cancelRun()` / `finalizeCancelledRun()` 実行時 |
+| `run.failed` | `processRun` の catch ブロック (非リトライエラー) |
+
+---
+
 ## Run のライフサイクル
 
 ```
 queued → running → completed
                  → failed
+                 → cancelled (任意のチェックポイントで中断)
                  → waiting_approval → (approve/deny) → running → ...
                  → recovering → running → ...
                                        → failed
@@ -79,6 +137,7 @@ queued → running → completed
 | `recovering` | エラーからの自動リカバリ中 |
 | `completed` | 正常完了 |
 | `failed` | エラーで終了 |
+| `cancelled` | ユーザーまたはシステムによりキャンセルされた |
 
 ### フェーズ
 
@@ -95,6 +154,64 @@ Runの中でさらに細かい状態を追跡します:
 | `recovering` | リカバリ中 |
 | `completed` | 完了 |
 | `failed` | 失敗 |
+| `cancelled` | キャンセル済み |
+
+---
+
+## キャンセル制御
+
+### AbortController によるキャンセル伝播
+
+`processRun()` は実行開始時に `AbortController` を作成し、`activeAbortControllers` マップに `runId` をキーとして登録します。`AbortSignal` はプロバイダの `generate()` に渡され、進行中のHTTPリクエストを中断できます。
+
+```
+cancelRun({ runId, actor })
+  │
+  ├─ Run を cancelled に更新 (DB)
+  ├─ activeAbortControllers.get(runId)?.abort()
+  │     └─ LLM API の fetch が AbortError を throw
+  └─ emitRunEvent('run.cancelled')
+```
+
+### キャンセル可能なステータス
+
+`cancelRun()` は以下のステータスの Run のみキャンセルできます:
+- `queued`
+- `running`
+- `recovering`
+
+### 4つのチェックポイント
+
+`runLoop` 内で `isRunCancelled(runId)` を呼び出し、キャンセル済みなら `finalizeCancelledRun()` を呼んでループを終了します。
+
+| チェックポイント | 位置 |
+|---|---|
+| 1 | `while` ループ先頭 |
+| 2 | LLM レスポンス受信後 |
+| 3 | 各ツール呼び出し前 |
+| 4 | 全ツール完了後 |
+
+さらに、プロバイダ内で `AbortError` が発生した場合もキャンセル検知として処理されます。
+
+### `finalizeCancelledRun()`
+
+キャンセル時の後処理を行います:
+
+1. 部分的なアシスタントテキストがあれば `_(中断されました)_` を末尾に追加して保存
+2. 未完了のツールコール（結果が返っていないもの）に対して合成 `tool_result` を挿入
+3. Run のステータスを `cancelled`、フェーズを `cancelled` に更新
+4. `run.cancelled` Conversation Event を記録
+5. `emitRunEvent` で `run.cancelled` イベントを配信
+
+### キャンセル API
+
+```
+POST /api/runs/:runId/cancel
+```
+
+- CSRF トークン必要
+- 認証済みユーザーのみ（Run の所有者であること）
+- レスポンス: `{ ok: true, data: { ok: true } }`
 
 ---
 
@@ -215,7 +332,7 @@ LLM: use_skill({ skill_name: "code_review" })
    - pendingTool: { callId, name, input } を snapshot に保存
 
 3. チャネルアダプタ経由で通知
-   - Web: リアルタイム更新
+   - Web: SSE で approval.requested イベントを配信
    - Slack: Block Kit ボタン（Approve / Deny）
    - Discord: Component ボタン（Approve / Deny）
 
@@ -243,16 +360,33 @@ LLM: use_skill({ skill_name: "code_review" })
 LLM API 呼び出しで一時的なエラーが発生した場合、自動リトライします。
 
 ```
-リトライ対象:
-  - HTTP 429 (Rate Limit)
-  - HTTP 500, 502, 503, 504, 529 (Server Error)
+リトライ対象 (RETRYABLE_HTTP_CODES):
+  - HTTP 429, 500, 502, 503, 504, 529
+
+ネットワークエラー:
   - ETIMEDOUT, ECONNRESET, UND_ERR_CONNECT_TIMEOUT
-  - メッセージに "overloaded", "rate_limit", "capacity" 等を含む
+
+メッセージパターン (RETRYABLE_ERROR_PATTERNS):
+  - overloaded, rate_limit, rate limit, capacity
+  - temporarily unavailable, resource_exhausted
+  - quota exceeded, service unavailable, try again
 
 リトライ戦略:
-  - 最大 4 回
+  - 最大 MAX_API_RETRIES = 4 回
   - 指数バックオフ: 500ms, 1000ms, 2000ms, 4000ms
 ```
+
+### エラー分類
+
+`classifyApiError(error)` — API通信エラーを分類:
+- ネットワークエラーコード (ETIMEDOUT, ECONNRESET, UND_ERR_CONNECT_TIMEOUT) → retryable
+- RETRYABLE_HTTP_CODES に含まれるHTTPステータス → retryable
+- メッセージが RETRYABLE_ERROR_PATTERNS にマッチ → retryable
+- それ以外 → non-retryable
+
+`classifyToolError(error)` — ツール実行エラーを分類:
+- ETIMEDOUT, EBUSY, ECONNRESET → retryable
+- それ以外 → non-retryable
 
 ### Run レベルのリカバリ
 
@@ -262,7 +396,7 @@ LLM API 呼び出しで一時的なエラーが発生した場合、自動リト
 Run 状態:
   running → recovering (リトライ可能エラー)
   recovering → running (再試行成功)
-  recovering → failed (最大3回に達した)
+  recovering → failed (最大 MAX_RECOVERY_ATTEMPTS = 3 回に達した)
 ```
 
 ### サーバー再起動後のリカバリ
@@ -291,6 +425,7 @@ Run 状態:
 | `run.queued` | Run がキューに入った |
 | `run.started` | Run が開始した |
 | `run.recovering` | Run がリカバリ中 |
+| `run.cancelled` | Run がキャンセルされた |
 | `run.failed` | Run が失敗した |
 | `tool.result` | ツール実行結果 |
 | `approval.requested` | 承認リクエスト |
@@ -299,6 +434,49 @@ Run 状態:
 | `automation.triggered` | Automation がトリガーされた |
 
 イベントはオートインクリメントの整数IDを持ち、カーソルベースのストリーミングに対応しています。
+
+---
+
+## プロバイダーストリーミング統合
+
+### `async *generate()` インターフェース
+
+すべてのLLMプロバイダは `generate()` を async generator として実装しています。ストリーミング中は `{ type: 'text_delta', text }` を yield し、完了時に正規化されたレスポンスを `return` します。
+
+```
+async *generate({ messages, systemPrompt, toolDefinitions, maxTokens, signal })
+  │
+  ├─ yield { type: 'text_delta', text: '...' }  (繰り返し)
+  │
+  └─ return { assistantMessage, assistantText, stopReason }
+```
+
+`signal` パラメータ (`AbortSignal`) により、キャンセル時に進行中のHTTPリクエストを即座に中断できます。
+
+### `wrapAsyncGenerator` ユーティリティ
+
+`for await...of` は async generator の `return` 値（`{ value, done: true }` の `value`）を破棄します。`wrapAsyncGenerator` はこの問題を解決するラッパーです。
+
+```javascript
+// イテレータオブジェクトに .result ゲッターを追加
+const genStream = provider.generate({ messages, ... })
+
+for await (const delta of genStream) {
+    // delta = { type: 'text_delta', text: '...' }
+    yield { type: 'delta', runId, ...delta }
+}
+
+const result = genStream.result
+// result = { assistantMessage, assistantText, stopReason }
+```
+
+### プロバイダ別の実装
+
+| プロバイダ | ストリーミング方式 | ラッパー |
+|---|---|---|
+| Anthropic | `@anthropic-ai/sdk` の `messages.stream` | 独自のイテレータラッパー |
+| OpenAI | `fetch` + SSE パース (`data:` 行を手動解析) | `wrapAsyncGenerator` |
+| Gemini | `fetch` + SSE パース (`streamGenerateContent?alt=sse`) | `wrapAsyncGenerator` |
 
 ---
 
