@@ -12,12 +12,11 @@ import { Button } from '../../components/ui/button.jsx'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../../components/ui/card.jsx'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogDescription } from '../../components/ui/dialog.jsx'
 import { Input } from '../../components/ui/input.jsx'
-import { ScrollArea } from '../../components/ui/scroll-area.jsx'
 
 function ToolCheckboxList({ tools, onChange, toolCatalog, mcpServers }) {
 	const { t } = useI18n()
 	const [search, setSearch] = useState('')
-	const [collapsed, setCollapsed] = useState(() => new Set())
+	const [expanded, setExpanded] = useState(() => new Set())
 
 	const orphanedTools = useMemo(() => {
 		const catalogNames = new Set(toolCatalog.map(t => t.name))
@@ -43,7 +42,7 @@ function ToolCheckboxList({ tools, onChange, toolCatalog, mcpServers }) {
 	}, [filtered])
 
 	const toggleCategory = key => {
-		setCollapsed(prev => {
+		setExpanded(prev => {
 			const next = new Set(prev)
 			next.has(key) ? next.delete(key) : next.add(key)
 			return next
@@ -61,12 +60,12 @@ function ToolCheckboxList({ tools, onChange, toolCatalog, mcpServers }) {
 					value={search}
 				/>
 			</div>
-			<ScrollArea className="max-h-[24rem] p-3">
+			<div className="max-h-[24rem] overflow-y-auto p-3">
 				{grouped.length === 0 && (
 					<p className="py-6 text-center text-sm text-muted-foreground">{t('admin.toolPolicies.noResults')}</p>
 				)}
 				{grouped.map(cat => {
-					const isOpen = !collapsed.has(cat.name)
+					const isOpen = expanded.has(cat.name)
 					const selectedCount = cat.tools.filter(tool => tools.includes(tool.name)).length
 					return (
 						<div key={cat.name} className="mb-1">
@@ -120,12 +119,12 @@ function ToolCheckboxList({ tools, onChange, toolCatalog, mcpServers }) {
 							onClick={() => toggleCategory('__orphaned__')}
 							type="button"
 						>
-							<ChevronRight className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform duration-200 ${!collapsed.has('__orphaned__') ? 'rotate-90' : ''}`} />
+							<ChevronRight className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform duration-200 ${expanded.has('__orphaned__') ? 'rotate-90' : ''}`} />
 							<span>{t('admin.toolPolicies.orphanedTools')}</span>
 							<span className="ml-1 rounded bg-destructive/10 px-1.5 py-0.5 text-[10px] font-semibold text-destructive">{orphanedTools.length}</span>
 						</button>
 						<AnimatePresence initial={false}>
-							{!collapsed.has('__orphaned__') && (
+							{expanded.has('__orphaned__') && (
 								<motion.div
 									initial={{ height: 0, opacity: 0 }}
 									animate={{ height: 'auto', opacity: 1 }}
@@ -155,7 +154,7 @@ function ToolCheckboxList({ tools, onChange, toolCatalog, mcpServers }) {
 						</AnimatePresence>
 					</div>
 				)}
-			</ScrollArea>
+			</div>
 		</div>
 	)
 }
@@ -167,6 +166,7 @@ export default function ToolPoliciesPage() {
 	const toolCatalog = data?.tools || []
 	const mcpServers = data?.mcpServers || []
 	const users = data?.users || []
+	const catalogNameSet = useMemo(() => new Set(toolCatalog.map(t => t.name)), [toolCatalog])
 
 	const [newPolicy, setNewPolicy] = useState({ name: '', description: '', tools: [] })
 	const [createOpen, setCreateOpen] = useState(false)
@@ -195,8 +195,15 @@ export default function ToolPoliciesPage() {
 					</div>
 				</CardHeader>
 				<CardContent className="space-y-4">
-					{toolPolicies.map(policy => (
+					{toolPolicies.map(policy => {
+						const orphanedCount = (policy.tools || []).filter(n => !catalogNameSet.has(n)).length
+						return (
 						<div key={policy.id} className="rounded-lg border p-4">
+							{orphanedCount > 0 && (
+								<p className="mb-3 rounded-md bg-destructive/10 px-3 py-1.5 text-xs text-destructive">
+									{t('admin.toolPolicies.orphanedToolsWarning', { count: orphanedCount })}
+								</p>
+							)}
 							<div className="flex items-start justify-between gap-3">
 								<div>
 									<div className="text-sm font-semibold">{policy.name}</div>
@@ -220,7 +227,8 @@ export default function ToolPoliciesPage() {
 								))}
 							</div>
 						</div>
-					))}
+						)
+					})}
 				</CardContent>
 			</Card>
 
@@ -252,6 +260,11 @@ export default function ToolPoliciesPage() {
 					</DialogHeader>
 					{editor && (
 						<div className="space-y-4">
+							{(editor.tools || []).some(n => !catalogNameSet.has(n)) && (
+								<p className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
+									{t('admin.toolPolicies.orphanedToolsWarning', { count: (editor.tools || []).filter(n => !catalogNameSet.has(n)).length })}
+								</p>
+							)}
 							<Input onChange={e => setEditor(c => ({ ...c, name: e.target.value }))} placeholder={t('common.policyName')} value={editor.name} />
 							<Input onChange={e => setEditor(c => ({ ...c, description: e.target.value }))} placeholder={t('common.description')} value={editor.description} />
 							<ToolCheckboxList tools={editor.tools} onChange={tools => setEditor(c => ({ ...c, tools }))} toolCatalog={toolCatalog} mcpServers={mcpServers} />

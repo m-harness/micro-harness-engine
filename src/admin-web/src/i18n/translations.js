@@ -216,7 +216,8 @@ export const translations = {
 				noResults: 'No tools found',
 				orphanedTools: 'Unavailable Tools',
 				toolUnavailable: 'removed',
-				toolUnavailableDescription: 'This tool is no longer available. Uncheck to remove from policy.'
+				toolUnavailableDescription: 'This tool is no longer available. Uncheck to remove from policy.',
+				orphanedToolsWarning: '{count} unavailable tool(s)'
 			},
 			filePolicies: {
 				title: 'File Policies',
@@ -615,7 +616,8 @@ export const translations = {
 				noResults: '該当するツールがありません',
 				orphanedTools: '利用不可ツール',
 				toolUnavailable: '削除済み',
-				toolUnavailableDescription: 'このツールはカタログから削除されています。チェックを外してください。'
+				toolUnavailableDescription: 'このツールはカタログから削除されています。チェックを外してください。',
+				orphanedToolsWarning: '{count} 件の利用不可ツール'
 			},
 			filePolicies: {
 				title: '外部参照ポリシー',
