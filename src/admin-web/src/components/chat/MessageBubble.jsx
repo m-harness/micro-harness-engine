@@ -57,6 +57,29 @@ export function MessageBubble({ message }) {
 	)
 }
 
+export function StreamingBubble({ text }) {
+	return (
+		<motion.div
+			initial={{ opacity: 0, y: 12 }}
+			animate={{ opacity: 1, y: 0 }}
+			transition={{ duration: 0.25 }}
+			className="flex justify-start"
+		>
+			<div className="max-w-[85%] rounded-2xl rounded-bl-sm border bg-card px-4 py-3 shadow-sm sm:max-w-[72%]">
+				<div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+					Agent
+				</div>
+				<div className="markdown-body text-sm leading-6">
+					<ReactMarkdown remarkPlugins={[remarkGfm]}>
+						{text}
+					</ReactMarkdown>
+					<span className="inline-block h-4 w-1.5 animate-pulse bg-foreground/60 align-text-bottom" />
+				</div>
+			</div>
+		</motion.div>
+	)
+}
+
 function ToolMessage({ message, t }) {
 	const [expanded, setExpanded] = useState(false)
 	const toolNameMatch = message.contentText?.match(/^\[Tool\]\s+(\S+?)\(/)

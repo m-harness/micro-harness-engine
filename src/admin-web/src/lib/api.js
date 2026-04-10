@@ -40,6 +40,9 @@ export const api = {
 	runAutomationNow(automationId) {
 		return http.post(`/api/automations/${encodeURIComponent(automationId)}/run-now`)
 	},
+	cancelRun(runId) {
+		return http.post(`/api/runs/${encodeURIComponent(runId)}/cancel`)
+	},
 	decideApproval(approvalId, { decision }) {
 		return http.post(`/api/approvals/${encodeURIComponent(approvalId)}/decision`, { decision })
 	},

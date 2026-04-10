@@ -1,21 +1,24 @@
 import { useAtom } from 'jotai'
-import { useCallback, useEffect, useRef } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { api } from '../lib/api.js'
+import { createSSEConnection } from '../lib/sse.js'
 import { setUserCsrfToken } from '../lib/axios.js'
 import { authStateAtom } from '../stores/auth.js'
 import { workspaceBusyKeyAtom } from '../stores/ui.js'
-import { conversationViewAtom, selectedConversationIdAtom, workspaceAtom } from '../stores/workspace.js'
+import { conversationViewAtom, selectedConversationIdAtom, streamingMessageAtom, workspaceAtom } from '../stores/workspace.js'
 
-const REFRESH_INTERVAL_MS = 4000
+const FALLBACK_REFRESH_MS = 4000
 
 export function useWorkspace() {
 	const [authState, setAuthState] = useAtom(authStateAtom)
 	const [workspace, setWorkspace] = useAtom(workspaceAtom)
 	const [selectedConversationId, setSelectedConversationId] = useAtom(selectedConversationIdAtom)
 	const [conversationView, setConversationView] = useAtom(conversationViewAtom)
+	const [streamingMessage, setStreamingMessage] = useAtom(streamingMessageAtom)
 	const [busyKey, setBusyKey] = useAtom(workspaceBusyKeyAtom)
+	const [useSSE, setUseSSE] = useState(true)
 	const navigate = useNavigate()
 	const selectedIdRef = useRef(selectedConversationId)
 	selectedIdRef.current = selectedConversationId
@@ -76,11 +79,12 @@ export function useWorkspace() {
 	}, [runAction, loadWorkspace, navigate])
 
 	const selectConversation = useCallback(async (conversationId) => {
+		setStreamingMessage(null)
 		await runAction(`select-${conversationId}`, async () => {
 			await loadConversation(conversationId, workspace.conversations)
 			navigate(`/c/${conversationId}`)
 		})
-	}, [runAction, loadConversation, workspace.conversations, navigate])
+	}, [runAction, loadConversation, workspace.conversations, navigate, setStreamingMessage])
 
 	const sendMessage = useCallback(async (text) => {
 		if (!text.trim()) return
@@ -94,6 +98,14 @@ export function useWorkspace() {
 			await loadWorkspace(conversationId)
 		})
 	}, [runAction, loadWorkspace])
+
+	const cancelRun = useCallback(async (runId) => {
+		await runAction('cancel-run', async () => {
+			await api.cancelRun(runId)
+			setStreamingMessage(null)
+			await loadWorkspace(selectedIdRef.current)
+		})
+	}, [runAction, loadWorkspace, setStreamingMessage])
 
 	const handleApproval = useCallback(async (approvalId, decision) => {
 		await runAction(`approval-${approvalId}`, async () => {
@@ -154,34 +166,75 @@ export function useWorkspace() {
 		})
 	}, [runAction, loadWorkspace])
 
+	// SSE connection for real-time streaming
 	useEffect(() => {
-		if (!authState.user) return
+		if (!authState.user || !selectedConversationId || !useSSE) return
+
+		const sse = createSSEConnection(
+			`/api/conversations/${encodeURIComponent(selectedConversationId)}/stream`,
+			{
+				onEvent: (event) => {
+					switch (event.type) {
+						case 'delta':
+							if (event.data?.type === 'text_delta' && event.data?.text) {
+								setStreamingMessage(prev => ({
+									text: (prev?.text || '') + event.data.text,
+									runId: event.data.runId
+								}))
+							}
+							break
+						case 'run.completed':
+						case 'run.cancelled':
+						case 'run.failed':
+							setStreamingMessage(null)
+							loadWorkspace(selectedConversationId).catch(() => {})
+							break
+						case 'approval.requested':
+							loadWorkspace(selectedConversationId).catch(() => {})
+							break
+					}
+				},
+				onError: () => {
+					setUseSSE(false)
+				},
+				onClose: () => {}
+			}
+		)
+
+		return () => sse.close()
+	}, [authState.user, selectedConversationId, useSSE, setStreamingMessage, loadWorkspace])
+
+	// Fallback polling when SSE is unavailable
+	useEffect(() => {
+		if (!authState.user || useSSE) return
 		let cancelled = false
 		const timer = window.setInterval(async () => {
 			if (cancelled) return
 			try {
 				await loadWorkspace(selectedIdRef.current)
-			} catch (error) {
-				// 401 is handled by the axios interceptor (context-aware redirect).
-				// Other errors (network, 5xx) are silently ignored during background refresh.
+			} catch {
+				// 401 is handled by the axios interceptor.
+				// Other errors are silently ignored during background refresh.
 			}
-		}, REFRESH_INTERVAL_MS)
+		}, FALLBACK_REFRESH_MS)
 		return () => {
 			cancelled = true
 			window.clearInterval(timer)
 		}
-	}, [authState.user, loadWorkspace])
+	}, [authState.user, useSSE, loadWorkspace])
 
 	return {
 		workspace,
 		selectedConversationId,
 		conversationView,
+		streamingMessage,
 		busyKey,
 		loadWorkspace,
 		loadConversation,
 		createConversation,
 		selectConversation,
 		sendMessage,
+		cancelRun,
 		handleApproval,
 		createAutomation,
 		updateAutomationStatus,

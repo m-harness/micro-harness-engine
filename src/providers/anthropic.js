@@ -99,7 +99,7 @@ export const anthropicProvider = {
 	capabilities: {
 		toolCalling: true,
 		parallelToolCalls: true,
-		streaming: false,
+		streaming: true,
 		structuredOutput: false,
 		vision: false
 	},
@@ -114,8 +114,8 @@ export const anthropicProvider = {
 
 		return null
 	},
-	async generate({ messages, systemPrompt, toolDefinitions, maxTokens }) {
-		const response = await client.messages.create({
+	async *generate({ messages, systemPrompt, toolDefinitions, maxTokens, signal }) {
+		const params = {
 			model: getAnthropicModel(),
 			max_tokens: maxTokens,
 			system: [
@@ -130,9 +130,27 @@ export const anthropicProvider = {
 				disable_parallel_tool_use: true
 			},
 			messages: toAnthropicMessages(messages)
+		}
+
+		const stream = client.messages.stream(params, signal ? { signal } : undefined)
+		let accumulated = ''
+
+		stream.on('text', (text) => {
+			accumulated += text
 		})
 
-		return normalizeAnthropicResponse(response)
+		for await (const event of stream) {
+			if (signal?.aborted) throw new DOMException('Aborted', 'AbortError')
+
+			if (event.type === 'content_block_delta' && event.delta?.type === 'text_delta') {
+				yield { type: 'text_delta', text: event.delta.text }
+			}
+		}
+
+		const finalMessage = await stream.finalMessage()
+		const result = normalizeAnthropicResponse(finalMessage)
+		this.generate.result = result
+		return result
 	},
 	setClientForTesting(nextClient) {
 		client = nextClient
@@ -142,4 +160,25 @@ export const anthropicProvider = {
 			apiKey: process.env.ANTHROPIC_API_KEY
 		})
 	}
+}
+
+// Attach result getter to the generator protocol
+const originalGenerate = anthropicProvider.generate
+anthropicProvider.generate = function (...args) {
+	const gen = originalGenerate.apply(this, args)
+	let finalResult = null
+	const wrappedGen = {
+		[Symbol.asyncIterator]() { return this },
+		async next() {
+			const item = await gen.next()
+			if (item.done) {
+				finalResult = item.value
+			}
+			return item
+		},
+		async return(val) { return gen.return(val) },
+		async throw(err) { return gen.throw(err) },
+		get result() { return finalResult }
+	}
+	return wrappedGen
 }

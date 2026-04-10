@@ -215,6 +215,8 @@ export class MicroHarnessEngineApp {
 		this.provider = getProvider(appConfig.llmProvider)
 		this.channelAdapters = new Map()
 		this.activeRunLocks = new Set()
+		this.activeAbortControllers = new Map()
+		this.runEventListeners = new Map()
 		this.automationService = new AutomationService({
 			onAutomationTriggered: automation => {
 				this.enqueueAutomationRun(automation)
@@ -286,6 +288,121 @@ export class MicroHarnessEngineApp {
 		if (this.automationInterval) {
 			clearInterval(this.automationInterval)
 			this.automationInterval = null
+		}
+	}
+
+	// ── Cancel / Abort ──
+
+	cancelRun({ runId, actor }) {
+		const run = getAgentRunById(runId)
+		if (!run) {
+			throw new HttpError(404, 'Run not found.')
+		}
+		const conversation = getConversationById(run.conversationId)
+		if (!isConversationOwner(conversation, actor)) {
+			throw new HttpError(404, 'Run not found.')
+		}
+		if (!['queued', 'running', 'recovering'].includes(run.status)) {
+			throw new HttpError(409, `Run is already ${run.status}.`)
+		}
+		updateAgentRun({
+			id: runId,
+			status: 'cancelled',
+			phase: 'cancelled',
+			snapshot: run.snapshot,
+			completedAt: new Date().toISOString()
+		})
+		createConversationEvent({
+			conversationId: run.conversationId,
+			runId,
+			kind: 'run.cancelled',
+			payload: {}
+		})
+		this.activeAbortControllers.get(runId)?.abort()
+		this.emitRunEvent(runId, { type: 'run.cancelled', data: { runId, status: 'cancelled' } })
+		return { ok: true }
+	}
+
+	isRunCancelled(runId) {
+		const run = getAgentRunById(runId)
+		return !run || run.status === 'cancelled'
+	}
+
+	getAbortSignal(runId) {
+		return this.activeAbortControllers.get(runId)?.signal
+	}
+
+	finalizeCancelledRun(runId, loopMessages, conversation) {
+		const lastAssistant = [...loopMessages].reverse().find(m => m.role === 'assistant')
+		if (lastAssistant) {
+			const partialText = extractTextFromNormalizedBlocks(lastAssistant.content || [])
+			if (partialText) {
+				createMessage({
+					conversationId: conversation.id,
+					role: 'assistant',
+					contentText: partialText + '\n\n_(中断されました)_',
+					content: lastAssistant.content
+				})
+			}
+
+			const pendingToolCalls = (lastAssistant.content || []).filter(b => b.type === 'tool_call')
+			for (const tc of pendingToolCalls) {
+				const hasResult = loopMessages.some(m =>
+					m.role === 'tool' && m.content?.some(b => b.callId === tc.callId)
+				)
+				if (!hasResult) {
+					loopMessages.push({
+						role: 'tool',
+						content: [{
+							type: 'tool_result',
+							callId: tc.callId,
+							name: tc.name,
+							output: { ok: false, error: 'Run was cancelled by user.' }
+						}]
+					})
+				}
+			}
+		}
+
+		updateAgentRun({
+			id: runId,
+			status: 'cancelled',
+			phase: 'cancelled',
+			snapshot: { loopMessages },
+			completedAt: new Date().toISOString()
+		})
+		createConversationEvent({
+			conversationId: conversation.id,
+			runId,
+			kind: 'run.cancelled',
+			payload: {}
+		})
+		this.emitRunEvent(runId, { type: 'run.cancelled', data: { runId, status: 'cancelled' } })
+	}
+
+	// ── SSE Event Emitter ──
+
+	addRunEventListener(conversationId, listener) {
+		if (!this.runEventListeners.has(conversationId)) {
+			this.runEventListeners.set(conversationId, new Set())
+		}
+		this.runEventListeners.get(conversationId).add(listener)
+	}
+
+	removeRunEventListener(conversationId, listener) {
+		this.runEventListeners.get(conversationId)?.delete(listener)
+		if (this.runEventListeners.get(conversationId)?.size === 0) {
+			this.runEventListeners.delete(conversationId)
+		}
+	}
+
+	emitRunEvent(runId, event) {
+		const run = getAgentRunById(runId)
+		if (!run) return
+		const listeners = this.runEventListeners.get(run.conversationId)
+		if (!listeners) return
+		for (const listener of listeners) {
+			try { listener(event) } catch {}
 		}
 	}
 
@@ -793,6 +910,8 @@ export class MicroHarnessEngineApp {
 		}
 
 		this.activeRunLocks.add(runId)
+		const abortController = new AbortController()
+		this.activeAbortControllers.set(runId, abortController)
 
 		try {
 			const run = getAgentRunById(runId)
@@ -821,16 +940,22 @@ export class MicroHarnessEngineApp {
 				], this.provider.name)
 			}
 
-			await this.runLoop({
+			const loopGen = this.runLoop({
 				run,
 				conversation,
 				channelIdentity,
 				ownerUser,
 				loopMessages
 			})
+			for await (const event of loopGen) {
+				this.emitRunEvent(runId, event)
+			}
 		} catch (error) {
+			if (error?.name === 'AbortError') {
+				return
+			}
 			const run = getAgentRunById(runId)
-			if (run) {
+			if (run && run.status !== 'cancelled') {
 				const classification = classifyApiError(error)
 				const recoveryCount = run.snapshot?.recoveryCount || 0
 
@@ -871,9 +996,11 @@ export class MicroHarnessEngineApp {
 							error: String(error?.message || error)
 						}
 					})
+					this.emitRunEvent(runId, { type: 'run.failed', data: { runId: run.id, error: String(error?.message || error) } })
 				}
 			}
 		} finally {
+			this.activeAbortControllers.delete(runId)
 			this.activeRunLocks.delete(runId)
 		}
 	}
@@ -939,41 +1066,49 @@ export class MicroHarnessEngineApp {
 			}
 		})
 
-		await this.runLoop({
+		const loopGen = this.runLoop({
 			run: getAgentRunById(run.id),
 			conversation,
 			channelIdentity,
 			ownerUser,
 			loopMessages
 		})
+		for await (const event of loopGen) {
+			this.emitRunEvent(run.id, event)
+		}
 	}
 
-	async runLoop({
+	async *runLoop({
 		run,
 		conversation,
 		channelIdentity,
 		ownerUser,
 		loopMessages
 	}) {
+		const runId = run.id
+		const mode = run.snapshot?.mode || 'new'
+
 		updateAgentRun({
-			id: run.id,
+			id: runId,
 			status: 'running',
 			phase: 'calling_model',
-			snapshot: {
-				loopMessages,
-				mode: run.snapshot?.mode || 'new'
-			}
+			snapshot: { loopMessages, mode }
 		})
 		createConversationEvent({
 			conversationId: conversation.id,
-			runId: run.id,
+			runId,
 			kind: 'run.started',
-			payload: {
-				runId: run.id
-			}
+			payload: { runId }
 		})
+		yield { type: 'run.started', data: { runId, status: 'running', phase: 'calling_model' } }
 
 		while (true) {
+			// ── checkpoint 1: loop top ──
+			if (this.isRunCancelled(runId)) {
+				this.finalizeCancelledRun(runId, loopMessages, conversation)
+				return
+			}
+
 			const allDefs = [...this.toolRegistry.getDefinitions(), ...this.mcpManager.getToolDefinitions()]
 			const policyTools = this.policyService.listAllowedToolDefinitions(
 				ownerUser.id,
@@ -985,17 +1120,38 @@ export class MicroHarnessEngineApp {
 			let result
 			for (let attempt = 0; attempt < MAX_API_RETRIES; attempt++) {
 				try {
-					result = await this.provider.generate({
+					const signal = this.getAbortSignal(runId)
+					const genStream = this.provider.generate({
 						messages: loopMessages,
 						systemPrompt: this.buildSystemPrompt({
 							user: ownerUser,
 							hasTools: toolDefinitions.length > 0
 						}),
 						toolDefinitions,
-						maxTokens: appConfig.maxTokens
+						maxTokens: appConfig.maxTokens,
+						signal
 					})
+
+					// consume async generator (streaming providers) or plain promise (legacy)
+					if (genStream && typeof genStream[Symbol.asyncIterator] === 'function') {
+						for await (const delta of genStream) {
+							yield { type: 'delta', data: { runId, ...delta } }
+						}
+						// The generator's return value holds the final assembled result
+						// We need to re-call to get the return – async generators expose it via .next() after done
+						// Instead, the provider accumulates internally and we get result from the last yield
+						// Actually, async generators return via { value, done:true } – but for-await doesn't capture it.
+						// So providers set this.lastResult during iteration.
+						result = genStream.result
+					} else {
+						result = await genStream
+					}
 					break
 				} catch (apiError) {
+					if (apiError?.name === 'AbortError') {
+						this.finalizeCancelledRun(runId, loopMessages, conversation)
+						return
+					}
 					const { retryable } = classifyApiError(apiError)
 					if (!retryable || attempt >= MAX_API_RETRIES - 1) {
 						throw apiError
@@ -1004,16 +1160,19 @@ export class MicroHarnessEngineApp {
 				}
 			}
 
+			// ── checkpoint 2: after LLM response ──
+			if (this.isRunCancelled(runId)) {
+				this.finalizeCancelledRun(runId, loopMessages, conversation)
+				return
+			}
+
 			loopMessages.push(result.assistantMessage)
 
 			updateAgentRun({
-				id: run.id,
+				id: runId,
 				status: 'running',
 				phase: 'processing_response',
-				snapshot: {
-					loopMessages,
-					mode: run.snapshot?.mode || 'new'
-				}
+				snapshot: { loopMessages, mode }
 			})
 			const assistantText = result.assistantText || extractTextFromNormalizedBlocks(result.assistantMessage.content || [])
 			const toolCalls = (result.assistantMessage.content || []).filter(block => block.type === 'tool_call')
@@ -1028,7 +1187,7 @@ export class MicroHarnessEngineApp {
 				})
 				createConversationEvent({
 					conversationId: conversation.id,
-					runId: run.id,
+					runId,
 					kind: 'message.assistant',
 					payload: {
 						messageId: message.id,
@@ -1036,20 +1195,26 @@ export class MicroHarnessEngineApp {
 					}
 				})
 				updateAgentRun({
-					id: run.id,
+					id: runId,
 					status: 'completed',
 					phase: 'completed',
-					snapshot: {
-						loopMessages,
-						mode: run.snapshot?.mode || 'new'
-					},
+					snapshot: { loopMessages, mode },
 					completedAt: new Date().toISOString()
 				})
 				await this.deliverAssistantMessage(conversation, channelIdentity, finalText)
+				yield { type: 'run.completed', data: { runId, status: 'completed', finalText } }
 				return
 			}
 
 			for (const toolCall of toolCalls) {
+				// ── checkpoint 3: before each tool ──
+				if (this.isRunCancelled(runId)) {
+					this.finalizeCancelledRun(runId, loopMessages, conversation)
+					return
+				}
+
+				yield { type: 'tool_call', data: { runId, name: toolCall.name, input: toolCall.input } }
+
 				let toolResult
 
 				const cached = getRunToolCall(run.id, toolCall.callId)
@@ -1128,7 +1293,7 @@ export class MicroHarnessEngineApp {
 						phase: 'waiting_approval',
 						snapshot: {
 							loopMessages,
-							mode: run.snapshot?.mode || 'new',
+							mode,
 							pendingTool: {
 								callId: toolCall.callId,
 								name: toolCall.name,
@@ -1137,6 +1302,7 @@ export class MicroHarnessEngineApp {
 						}
 					})
 					await this.deliverApprovalRequest(conversation, channelIdentity, approval)
+					yield { type: 'approval.requested', data: { runId: run.id, approvalId: approval.id, toolName: toolCall.name } }
 					return
 				}
 
@@ -1165,16 +1331,21 @@ export class MicroHarnessEngineApp {
 						}
 					]
 				})
+
+				yield { type: 'tool_result', data: { runId: run.id, name: toolCall.name, output: toolResult } }
+			}
+
+			// ── checkpoint 4: after all tools ──
+			if (this.isRunCancelled(runId)) {
+				this.finalizeCancelledRun(runId, loopMessages, conversation)
+				return
 			}
 
 			updateAgentRun({
-				id: run.id,
+				id: runId,
 				status: 'running',
 				phase: 'tool_results',
-				snapshot: {
-					loopMessages,
-					mode: run.snapshot?.mode || 'new'
-				}
+				snapshot: { loopMessages, mode }
 			})
 		}
 	}

@@ -119,6 +119,24 @@ function normalizeGeminiResponse(data) {
 	}
 }
 
+function wrapAsyncGenerator(genFn) {
+	return function (...args) {
+		const gen = genFn.apply(this, args)
+		let finalResult = null
+		return {
+			[Symbol.asyncIterator]() { return this },
+			async next() {
+				const item = await gen.next()
+				if (item.done) finalResult = item.value
+				return item
+			},
+			async return(val) { return gen.return(val) },
+			async throw(err) { return gen.throw(err) },
+			get result() { return finalResult }
+		}
+	}
+}
+
 export const geminiProvider = {
 	name: 'gemini',
 	displayName: 'Gemini',
@@ -126,7 +144,7 @@ export const geminiProvider = {
 	capabilities: {
 		toolCalling: true,
 		parallelToolCalls: false,
-		streaming: false,
+		streaming: true,
 		structuredOutput: false,
 		vision: false
 	},
@@ -141,7 +159,7 @@ export const geminiProvider = {
 
 		return null
 	},
-	async generate({ messages, systemPrompt, toolDefinitions }) {
+	generate: wrapAsyncGenerator(async function* ({ messages, systemPrompt, toolDefinitions, signal }) {
 		const apiKey = process.env.GEMINI_API_KEY
 
 		if (!apiKey) {
@@ -150,7 +168,7 @@ export const geminiProvider = {
 
 		const baseUrl = process.env.GEMINI_API_URL || 'https://generativelanguage.googleapis.com/v1beta'
 		const response = await fetch(
-			`${baseUrl}/models/${getGeminiModel()}:generateContent?key=${apiKey}`,
+			`${baseUrl}/models/${getGeminiModel()}:streamGenerateContent?key=${apiKey}&alt=sse`,
 			{
 				method: 'POST',
 				headers: {
@@ -169,19 +187,65 @@ export const geminiProvider = {
 					toolConfig: toolDefinitions.length > 0
 						? { functionCallingConfig: { mode: 'AUTO' } }
 						: undefined
-				})
+				}),
+				signal
 			}
 		)
 
-		const data = await response.json().catch(() => ({}))
-
 		if (!response.ok) {
+			const data = await response.json().catch(() => ({}))
 			throw buildHttpError(
 				response.status,
 				data?.error?.message || `Gemini request failed with status ${response.status}.`
 			)
 		}
 
-		return normalizeGeminiResponse(data)
-	}
+		const reader = response.body.getReader()
+		const decoder = new TextDecoder()
+		let buffer = ''
+		const allParts = []
+		let finishReason = null
+
+		try {
+			while (true) {
+				const { done, value } = await reader.read()
+				if (done) break
+
+				buffer += decoder.decode(value, { stream: true })
+				const lines = buffer.split('\n')
+				buffer = lines.pop()
+
+				for (const line of lines) {
+					const trimmed = line.trim()
+					if (!trimmed.startsWith('data: ')) continue
+					let data
+					try { data = JSON.parse(trimmed.slice(6)) } catch { continue }
+
+					const candidate = data.candidates?.[0]
+					if (!candidate) continue
+
+					const parts = candidate.content?.parts || []
+					for (const part of parts) {
+						allParts.push(part)
+						if (typeof part.text === 'string' && part.text) {
+							yield { type: 'text_delta', text: part.text }
+						}
+					}
+
+					if (candidate.finishReason) {
+						finishReason = candidate.finishReason
+					}
+				}
+			}
+		} finally {
+			reader.releaseLock()
+		}
+
+		return normalizeGeminiResponse({
+			candidates: [{
+				content: { parts: allParts },
+				finishReason
+			}]
+		})
+	})
 }

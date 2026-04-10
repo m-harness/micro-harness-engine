@@ -1,13 +1,16 @@
 import { useEffect, useRef } from 'react'
+import { useAtom } from 'jotai'
 import { useI18n } from '../../i18n/context.jsx'
-import { MessageBubble } from './MessageBubble.jsx'
+import { MessageBubble, StreamingBubble } from './MessageBubble.jsx'
 import { EmptyState } from '../shared/EmptyState.jsx'
 import { ScrollArea } from '../ui/scroll-area.jsx'
+import { streamingMessageAtom } from '../../stores/workspace.js'
 
 const SCROLL_THRESHOLD = 50
 
 export function MessageList({ messages, hasConversation }) {
 	const { t } = useI18n()
+	const [streamingMessage] = useAtom(streamingMessageAtom)
 	const bottomRef = useRef(null)
 	const isAtBottomRef = useRef(true)
 
@@ -20,7 +23,7 @@ export function MessageList({ messages, hasConversation }) {
 		if (isAtBottomRef.current) {
 			bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
 		}
-	}, [messages?.length])
+	}, [messages?.length, streamingMessage?.text])
 
 	if (!hasConversation) {
 		return (
@@ -50,6 +53,9 @@ export function MessageList({ messages, hasConversation }) {
 				{messages.map(message => (
 					<MessageBubble key={message.id} message={message} />
 				))}
+				{streamingMessage?.text && (
+					<StreamingBubble text={streamingMessage.text} />
+				)}
 				<div ref={bottomRef} />
 			</div>
 		</ScrollArea>

@@ -123,6 +123,24 @@ function normalizeOpenAiResponse(data) {
 	}
 }
 
+function wrapAsyncGenerator(genFn) {
+	return function (...args) {
+		const gen = genFn.apply(this, args)
+		let finalResult = null
+		return {
+			[Symbol.asyncIterator]() { return this },
+			async next() {
+				const item = await gen.next()
+				if (item.done) finalResult = item.value
+				return item
+			},
+			async return(val) { return gen.return(val) },
+			async throw(err) { return gen.throw(err) },
+			get result() { return finalResult }
+		}
+	}
+}
+
 export const openAiProvider = {
 	name: 'openai',
 	displayName: 'OpenAI',
@@ -130,7 +148,7 @@ export const openAiProvider = {
 	capabilities: {
 		toolCalling: true,
 		parallelToolCalls: true,
-		streaming: false,
+		streaming: true,
 		structuredOutput: false,
 		vision: false
 	},
@@ -145,7 +163,7 @@ export const openAiProvider = {
 
 		return null
 	},
-	async generate({ messages, systemPrompt, toolDefinitions, maxTokens }) {
+	generate: wrapAsyncGenerator(async function* ({ messages, systemPrompt, toolDefinitions, maxTokens, signal }) {
 		const apiKey = process.env.OPENAI_API_KEY
 
 		if (!apiKey) {
@@ -166,20 +184,90 @@ export const openAiProvider = {
 					tools: toOpenAiTools(toolDefinitions),
 					tool_choice: 'auto',
 					parallel_tool_calls: false,
-					max_tokens: maxTokens
-				})
+					max_tokens: maxTokens,
+					stream: true
+				}),
+				signal
 			}
 		)
 
-		const data = await response.json().catch(() => ({}))
-
 		if (!response.ok) {
+			const data = await response.json().catch(() => ({}))
 			throw buildHttpError(
 				response.status,
 				data?.error?.message || `OpenAI request failed with status ${response.status}.`
 			)
 		}
 
-		return normalizeOpenAiResponse(data)
-	}
+		const reader = response.body.getReader()
+		const decoder = new TextDecoder()
+		let buffer = ''
+		let accumulatedText = ''
+		const accumulatedToolCalls = new Map()
+		let finishReason = null
+
+		try {
+			while (true) {
+				const { done, value } = await reader.read()
+				if (done) break
+
+				buffer += decoder.decode(value, { stream: true })
+				const lines = buffer.split('\n')
+				buffer = lines.pop()
+
+				for (const line of lines) {
+					const trimmed = line.trim()
+					if (!trimmed.startsWith('data: ') || trimmed === 'data: [DONE]') continue
+					let data
+					try { data = JSON.parse(trimmed.slice(6)) } catch { continue }
+
+					const delta = data.choices?.[0]?.delta
+					if (!delta) continue
+
+					if (delta.content) {
+						accumulatedText += delta.content
+						yield { type: 'text_delta', text: delta.content }
+					}
+
+					if (delta.tool_calls) {
+						for (const tc of delta.tool_calls) {
+							const idx = tc.index ?? 0
+							if (!accumulatedToolCalls.has(idx)) {
+								accumulatedToolCalls.set(idx, { id: tc.id || '', name: tc.function?.name || '', arguments: '' })
+							}
+							const acc = accumulatedToolCalls.get(idx)
+							if (tc.id) acc.id = tc.id
+							if (tc.function?.name) acc.name = tc.function.name
+							if (tc.function?.arguments) acc.arguments += tc.function.arguments
+						}
+					}
+
+					if (data.choices?.[0]?.finish_reason) {
+						finishReason = data.choices[0].finish_reason
+					}
+				}
+			}
+		} finally {
+			reader.releaseLock()
+		}
+
+		const normalizedContent = []
+		if (accumulatedText) {
+			normalizedContent.push({ type: 'text', text: accumulatedText.trim() })
+		}
+		for (const [index, tc] of accumulatedToolCalls) {
+			normalizedContent.push({
+				type: 'tool_call',
+				callId: tc.id || buildSyntheticCallId('openai', tc.name, tc.arguments, index),
+				name: tc.name,
+				input: parseJsonObject(tc.arguments, {})
+			})
+		}
+
+		return {
+			assistantMessage: { role: 'assistant', content: normalizedContent },
+			assistantText: accumulatedText.trim(),
+			stopReason: normalizeFinishReason(finishReason)
+		}
+	})
 }
