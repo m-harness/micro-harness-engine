@@ -211,7 +211,9 @@ export const translations = {
 				deleteToolPolicy: 'Delete tool policy',
 				deleteDescription: 'Delete this tool policy.',
 				replacementRequired: 'This policy is assigned to users. Choose a replacement.',
-				noUsersAssigned: 'No users are assigned to this policy.'
+				noUsersAssigned: 'No users are assigned to this policy.',
+				searchTools: 'Search tools...',
+				noResults: 'No tools found'
 			},
 			filePolicies: {
 				title: 'File Policies',
@@ -605,7 +607,9 @@ export const translations = {
 				deleteToolPolicy: 'ツールポリシー削除',
 				deleteDescription: 'このツールポリシーを削除します。',
 				replacementRequired: 'このポリシーはユーザーに割り当てられています。代替を選択してください。',
-				noUsersAssigned: 'このポリシーに割り当てられたユーザーはいません。'
+				noUsersAssigned: 'このポリシーに割り当てられたユーザーはいません。',
+				searchTools: 'ツールを検索...',
+				noResults: '該当するツールがありません'
 			},
 			filePolicies: {
 				title: '外部参照ポリシー',
