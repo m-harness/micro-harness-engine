@@ -25,13 +25,14 @@ export function createSSEConnection(url, { onEvent, onError, onClose }) {
 
 			while (!closed) {
 				const { done, value } = await reader.read()
-				if (done) break
+				if (done || closed) break
 
 				buffer += decoder.decode(value, { stream: true })
 				const parts = buffer.split('\n\n')
 				buffer = parts.pop()
 
 				for (const part of parts) {
+					if (closed) break
 					if (!part.trim()) continue
 
 					let eventType = 'message'
@@ -47,7 +48,7 @@ export function createSSEConnection(url, { onEvent, onError, onClose }) {
 						}
 					}
 
-					if (data) {
+					if (data && !closed) {
 						try {
 							onEvent?.({ type: eventType, data: JSON.parse(data) })
 						} catch {

@@ -395,6 +395,13 @@ export const translations = {
 			revoke: 'Revoke',
 			noTokens: 'No personal access tokens yet.'
 		},
+		apiStatus: {
+			connecting: 'Connecting to server...',
+			error: 'Server connection error',
+			serverStarting: 'Server is starting up',
+			serverStartingDescription: 'The API server is not yet available. It will connect automatically once the server is ready.',
+			autoRetry: 'Retrying in {seconds}s...'
+		},
 		shared: {
 			chooseReplacement: 'Choose a replacement',
 			noUsersCanDelete: 'No users are assigned to this policy, so it can be deleted immediately.',
@@ -794,6 +801,13 @@ export const translations = {
 			lastUsed: '最終使用',
 			revoke: '取り消し',
 			noTokens: '個人アクセストークンがまだありません。'
+		},
+		apiStatus: {
+			connecting: 'サーバーに接続中...',
+			error: 'サーバー接続エラー',
+			serverStarting: 'サーバーを起動中',
+			serverStartingDescription: 'APIサーバーがまだ利用できません。サーバーの準備ができ次第、自動的に接続します。',
+			autoRetry: '{seconds}秒後にリトライ...'
 		},
 		shared: {
 			chooseReplacement: '代替を選択',

@@ -23,6 +23,10 @@ export function useWorkspace() {
 	const selectedIdRef = useRef(selectedConversationId)
 	selectedIdRef.current = selectedConversationId
 
+	// Stable boolean flag: avoids SSE reconnection when authState.user
+	// object reference changes (e.g. after loadWorkspace).
+	const isLoggedIn = !!authState.user
+
 	const loadConversation = useCallback(async (conversationId, conversations) => {
 		if (!conversationId) {
 			setSelectedConversationId(null)
@@ -168,13 +172,16 @@ export function useWorkspace() {
 
 	// SSE connection for real-time streaming
 	useEffect(() => {
-		if (!authState.user || !selectedConversationId || !useSSE) return
+		if (!isLoggedIn || !selectedConversationId || !useSSE) return
 
 		const sse = createSSEConnection(
 			`/api/conversations/${encodeURIComponent(selectedConversationId)}/stream`,
 			{
 				onEvent: (event) => {
 					switch (event.type) {
+						case 'run.started':
+							setStreamingMessage({ text: '', runId: event.data?.runId })
+							break
 						case 'delta':
 							if (event.data?.type === 'text_delta' && event.data?.text) {
 								setStreamingMessage(prev => ({
@@ -182,6 +189,12 @@ export function useWorkspace() {
 									runId: event.data.runId
 								}))
 							}
+							break
+						case 'tool_call':
+							setStreamingMessage(prev => ({
+								text: '',
+								runId: prev?.runId || event.data?.runId
+							}))
 							break
 						case 'run.completed':
 						case 'run.cancelled':
@@ -202,11 +215,11 @@ export function useWorkspace() {
 		)
 
 		return () => sse.close()
-	}, [authState.user, selectedConversationId, useSSE, setStreamingMessage, loadWorkspace])
+	}, [isLoggedIn, selectedConversationId, useSSE, setStreamingMessage, loadWorkspace])
 
 	// Fallback polling when SSE is unavailable
 	useEffect(() => {
-		if (!authState.user || useSSE) return
+		if (!isLoggedIn || useSSE) return
 		let cancelled = false
 		const timer = window.setInterval(async () => {
 			if (cancelled) return
@@ -221,7 +234,7 @@ export function useWorkspace() {
 			cancelled = true
 			window.clearInterval(timer)
 		}
-	}, [authState.user, useSSE, loadWorkspace])
+	}, [isLoggedIn, useSSE, loadWorkspace])
 
 	return {
 		workspace,

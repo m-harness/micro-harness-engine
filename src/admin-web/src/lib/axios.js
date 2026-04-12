@@ -35,7 +35,12 @@ instance.interceptors.response.use(
 		return payload?.data !== undefined ? payload.data : payload
 	},
 	error => {
-		if (error.response?.status === 401) {
+		const status = error.response?.status
+
+		// Detect server unavailable: no response (network error) or proxy gateway error
+		const serverUnavailable = !error.response || status === 502 || status === 503 || status === 504
+
+		if (status === 401) {
 			const isAdminRequest = error.config?.url?.startsWith('/api/admin/')
 			const pathname = getPathname()
 			const onAdminPage = pathname.startsWith('/admin')
@@ -47,7 +52,10 @@ instance.interceptors.response.use(
 			}
 		}
 		const message = error.response?.data?.error || error.message || 'Request failed'
-		return Promise.reject(new Error(message))
+		const wrapped = new Error(message)
+		wrapped.serverUnavailable = serverUnavailable
+		wrapped.status = status
+		return Promise.reject(wrapped)
 	}
 )
 
