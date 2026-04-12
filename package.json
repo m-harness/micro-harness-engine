@@ -19,6 +19,7 @@
 	},
 	"dependencies": {
 		"@anthropic-ai/sdk": "^0.54.0",
+		"@modelcontextprotocol/sdk": "^1.29.0",
 		"better-sqlite3": "^11.10.0",
 		"dotenv": "^16.4.7",
 		"picomatch": "^4.0.4"

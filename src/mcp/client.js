@@ -1,13 +1,13 @@
 /**
  * McpClient — manages a single MCP server connection.
- * Handles initialize handshake, tool discovery, request/response correlation, reconnection.
+ * Uses official @modelcontextprotocol/sdk for protocol and transport.
  */
 
-import { buildRequest, buildNotification } from './protocol.js'
-import { StdioTransport, HttpTransport } from './transport.js'
+import { Client } from '@modelcontextprotocol/sdk/client/index.js'
+import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
+import { ToolListChangedNotificationSchema } from '@modelcontextprotocol/sdk/types.js'
 
-const INITIALIZE_TIMEOUT = 15_000
-const REQUEST_TIMEOUT = 30_000
 const MAX_RECONNECT_ATTEMPTS = 3
 const RECONNECT_DELAY_BASE = 2000
 
@@ -16,22 +16,48 @@ export class McpClient {
 		this.serverName = serverName
 		this.serverConfig = serverConfig
 		this.state = 'disconnected' // disconnected | connecting | ready | failed
-		this.transport = null
-		this.nextRequestId = 1
-		this.pendingRequests = new Map()
 		this.tools = []
 		this.lastError = null
 		this._reconnectAttempts = 0
 		/** @type {Map<string, string>} sanitized tool name → original MCP tool name */
 		this._toolNameMap = new Map()
+		this._sdkClient = null
+		this._sdkTransport = null
 	}
 
 	async start() {
 		this.state = 'connecting'
 		try {
 			this._createTransport()
-			this.transport.start(message => this._handleMessage(message))
-			await this._initialize()
+			this._sdkClient = new Client(
+				{ name: 'microHarnessEngine', version: '1.0.0' },
+				{ capabilities: {} }
+			)
+
+			this._sdkClient.setNotificationHandler(
+				ToolListChangedNotificationSchema,
+				async () => {
+					await this._discoverTools().catch(err =>
+						console.warn(`[mcp] Tool re-discovery failed for "${this.serverName}":`, err.message)
+					)
+				}
+			)
+
+			this._sdkClient.onclose = () => {
+				if (this.state === 'ready') {
+					this.state = 'disconnected'
+					this._tryReconnect().catch(err => {
+						this.state = 'failed'
+						console.error(`[mcp] Reconnection failed for "${this.serverName}":`, err.message)
+					})
+				}
+			}
+
+			this._sdkClient.onerror = (error) => {
+				console.warn(`[mcp] Transport error for "${this.serverName}":`, error.message)
+			}
+
+			await this._sdkClient.connect(this._sdkTransport)
 			await this._discoverTools()
 			this.state = 'ready'
 			this.lastError = null
@@ -47,57 +73,25 @@ export class McpClient {
 	async stop() {
 		this.state = 'disconnected'
 		this.tools = []
-		for (const [, pending] of this.pendingRequests) {
-			clearTimeout(pending.timer)
-			pending.reject(new Error('Client stopped'))
+		if (this._sdkClient) {
+			try { await this._sdkClient.close() } catch {}
+			this._sdkClient = null
 		}
-		this.pendingRequests.clear()
-		if (this.transport) {
-			await this.transport.stop()
-			this.transport = null
-		}
+		this._sdkTransport = null
 	}
 
 	_createTransport() {
 		if (this.serverConfig.url) {
-			this.transport = new HttpTransport({
-				url: this.serverConfig.url,
-				headers: this.serverConfig.headers || {}
-			})
+			this._sdkTransport = new StreamableHTTPClientTransport(
+				new URL(this.serverConfig.url),
+				{ requestInit: { headers: this.serverConfig.headers || {} } }
+			)
 		} else {
-			this.transport = new StdioTransport({
+			this._sdkTransport = new StdioClientTransport({
 				command: this.serverConfig.command,
 				args: this.serverConfig.args || [],
-				env: this.serverConfig.env || {}
+				env: { ...process.env, ...(this.serverConfig.env || {}) }
 			})
-		}
-	}
-
-	async _initialize() {
-		const result = await this._sendRequest('initialize', {
-			protocolVersion: '2024-11-05',
-			capabilities: {},
-			clientInfo: {
-				name: 'microHarnessEngine',
-				version: '1.0.0'
-			}
-		}, INITIALIZE_TIMEOUT)
-
-		// notification送信はfire-and-forget（サーバーによりSSEで返ってsend()がブロックされうる）
-		this._sendNotification('notifications/initialized')
-		return result
-	}
-
-	_sendNotification(method, params) {
-		try {
-			const result = this.transport.send(buildNotification(method, params))
-			if (result instanceof Promise) {
-				result.catch(error => {
-					console.warn(`[mcp] Notification "${method}" failed for "${this.serverName}":`, error.message)
-				})
-			}
-		} catch (error) {
-			console.warn(`[mcp] Notification "${method}" failed for "${this.serverName}":`, error.message)
 		}
 	}
 
@@ -105,10 +99,8 @@ export class McpClient {
 		const tools = []
 		let cursor
 
-		// ページネーション対応: nextCursorがある限り取得を続ける
 		do {
-			const params = cursor ? { cursor } : {}
-			const result = await this._sendRequest('tools/list', params)
+			const result = await this._sdkClient.listTools(cursor ? { cursor } : undefined)
 			if (result?.tools) {
 				tools.push(...result.tools)
 			}
@@ -153,65 +145,7 @@ export class McpClient {
 		if (this.state !== 'ready') {
 			throw new Error(`Server "${this.serverName}" is not ready (state: ${this.state})`)
 		}
-		return this._sendRequest('tools/call', {
-			name: toolName,
-			arguments: args || {}
-		})
-	}
-
-	_sendRequest(method, params, timeout = REQUEST_TIMEOUT) {
-		const id = this.nextRequestId++
-		const data = buildRequest(id, method, params)
-
-		return new Promise((resolve, reject) => {
-			const timer = setTimeout(() => {
-				this.pendingRequests.delete(id)
-				reject(new Error(`Request "${method}" timed out after ${timeout}ms`))
-			}, timeout)
-
-			this.pendingRequests.set(id, { resolve, reject, timer })
-
-			try {
-				const sendResult = this.transport.send(data)
-				if (sendResult instanceof Promise) {
-					sendResult.catch(error => {
-						clearTimeout(timer)
-						this.pendingRequests.delete(id)
-						reject(error)
-					})
-				}
-			} catch (error) {
-				clearTimeout(timer)
-				this.pendingRequests.delete(id)
-				reject(error)
-			}
-		})
-	}
-
-	_handleMessage(message) {
-		if (message.id !== undefined && this.pendingRequests.has(message.id)) {
-			const pending = this.pendingRequests.get(message.id)
-			this.pendingRequests.delete(message.id)
-			clearTimeout(pending.timer)
-
-			if (message.error) {
-				pending.reject(new Error(`MCP error ${message.error.code}: ${message.error.message}`))
-			} else {
-				pending.resolve(message.result)
-			}
-			return
-		}
-
-		if (message.method && message.id === undefined) {
-			// サーバーからの通知
-			if (message.method === 'notifications/tools/list_changed') {
-				// ツール一覧が変わった — 再取得
-				this._discoverTools().catch(error => {
-					console.warn(`[mcp] Tool re-discovery failed for "${this.serverName}":`, error.message)
-				})
-			}
-			return
-		}
+		return this._sdkClient.callTool({ name: toolName, arguments: args || {} })
 	}
 
 	async _tryReconnect() {
@@ -225,10 +159,11 @@ export class McpClient {
 		const delay = RECONNECT_DELAY_BASE * this._reconnectAttempts
 		console.log(`[mcp] Reconnecting "${this.serverName}" in ${delay}ms (attempt ${this._reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})`)
 
-		if (this.transport) {
-			await this.transport.stop()
-			this.transport = null
+		if (this._sdkClient) {
+			try { await this._sdkClient.close() } catch {}
+			this._sdkClient = null
 		}
+		this._sdkTransport = null
 
 		await new Promise(resolve => setTimeout(resolve, delay))
 		await this.start()
