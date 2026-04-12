@@ -23,9 +23,12 @@ export class McpClient {
 		this._toolNameMap = new Map()
 		this._sdkClient = null
 		this._sdkTransport = null
+		this._stopped = false
+		this._reconnectTimer = null
 	}
 
 	async start() {
+		if (this._stopped) return
 		this.state = 'connecting'
 		try {
 			this._createTransport()
@@ -54,7 +57,7 @@ export class McpClient {
 			}
 
 			this._sdkClient.onerror = (error) => {
-				console.warn(`[mcp] Transport error for "${this.serverName}":`, error.message)
+				console.warn(`[mcp] Transport error for "${this.serverName}":`, error?.message ?? error)
 			}
 
 			await this._sdkClient.connect(this._sdkTransport)
@@ -71,6 +74,11 @@ export class McpClient {
 	}
 
 	async stop() {
+		this._stopped = true
+		if (this._reconnectTimer) {
+			clearTimeout(this._reconnectTimer)
+			this._reconnectTimer = null
+		}
 		this.state = 'disconnected'
 		this.tools = []
 		if (this._sdkClient) {
@@ -149,6 +157,7 @@ export class McpClient {
 	}
 
 	async _tryReconnect() {
+		if (this._stopped) return
 		this._reconnectAttempts++
 		if (this._reconnectAttempts > MAX_RECONNECT_ATTEMPTS) {
 			this.state = 'failed'
@@ -165,7 +174,11 @@ export class McpClient {
 		}
 		this._sdkTransport = null
 
-		await new Promise(resolve => setTimeout(resolve, delay))
+		await new Promise(resolve => {
+			this._reconnectTimer = setTimeout(resolve, delay)
+		})
+		this._reconnectTimer = null
+		if (this._stopped) return
 		await this.start()
 	}
 }
