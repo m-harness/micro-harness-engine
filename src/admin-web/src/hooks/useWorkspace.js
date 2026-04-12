@@ -1,15 +1,12 @@
 import { useAtom } from 'jotai'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { api } from '../lib/api.js'
-import { createSSEConnection } from '../lib/sse.js'
 import { setUserCsrfToken } from '../lib/axios.js'
 import { authStateAtom } from '../stores/auth.js'
 import { workspaceBusyKeyAtom } from '../stores/ui.js'
 import { conversationViewAtom, selectedConversationIdAtom, streamingMessageAtom, workspaceAtom } from '../stores/workspace.js'
-
-const FALLBACK_REFRESH_MS = 4000
 
 export function useWorkspace() {
 	const [authState, setAuthState] = useAtom(authStateAtom)
@@ -18,14 +15,9 @@ export function useWorkspace() {
 	const [conversationView, setConversationView] = useAtom(conversationViewAtom)
 	const [streamingMessage, setStreamingMessage] = useAtom(streamingMessageAtom)
 	const [busyKey, setBusyKey] = useAtom(workspaceBusyKeyAtom)
-	const [useSSE, setUseSSE] = useState(true)
 	const navigate = useNavigate()
 	const selectedIdRef = useRef(selectedConversationId)
 	selectedIdRef.current = selectedConversationId
-
-	// Stable boolean flag: avoids SSE reconnection when authState.user
-	// object reference changes (e.g. after loadWorkspace).
-	const isLoggedIn = !!authState.user
 
 	const loadConversation = useCallback(async (conversationId, conversations) => {
 		if (!conversationId) {
@@ -173,72 +165,6 @@ export function useWorkspace() {
 			await loadWorkspace(selectedIdRef.current)
 		})
 	}, [runAction, loadWorkspace])
-
-	// SSE connection for real-time streaming
-	useEffect(() => {
-		if (!isLoggedIn || !selectedConversationId || !useSSE) return
-
-		const sse = createSSEConnection(
-			`/api/conversations/${encodeURIComponent(selectedConversationId)}/stream`,
-			{
-				onEvent: (event) => {
-					switch (event.type) {
-						case 'run.started':
-							setStreamingMessage({ text: '', runId: event.data?.runId })
-							break
-						case 'delta':
-							if (event.data?.type === 'text_delta' && event.data?.text) {
-								setStreamingMessage(prev => ({
-									text: (prev?.text || '') + event.data.text,
-									runId: event.data.runId
-								}))
-							}
-							break
-						case 'tool_call':
-							setStreamingMessage(prev => ({
-								text: '',
-								runId: prev?.runId || event.data?.runId
-							}))
-							break
-						case 'run.completed':
-						case 'run.cancelled':
-						case 'run.failed':
-							setStreamingMessage(null)
-							loadWorkspace(selectedConversationId).catch(() => {})
-							break
-						case 'approval.requested':
-							loadWorkspace(selectedConversationId).catch(() => {})
-							break
-					}
-				},
-				onError: () => {
-					setUseSSE(false)
-				},
-				onClose: () => {}
-			}
-		)
-
-		return () => sse.close()
-	}, [isLoggedIn, selectedConversationId, useSSE, setStreamingMessage, loadWorkspace])
-
-	// Fallback polling when SSE is unavailable
-	useEffect(() => {
-		if (!isLoggedIn || useSSE) return
-		let cancelled = false
-		const timer = window.setInterval(async () => {
-			if (cancelled) return
-			try {
-				await loadWorkspace(selectedIdRef.current)
-			} catch {
-				// 401 is handled by the axios interceptor.
-				// Other errors are silently ignored during background refresh.
-			}
-		}, FALLBACK_REFRESH_MS)
-		return () => {
-			cancelled = true
-			window.clearInterval(timer)
-		}
-	}, [isLoggedIn, useSSE, loadWorkspace])
 
 	return {
 		workspace,
