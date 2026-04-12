@@ -46,7 +46,7 @@ export function useWorkspace() {
 		}
 	}, [setSelectedConversationId, setConversationView])
 
-	const loadWorkspace = useCallback(async (preferredConversationId = null) => {
+	const initWorkspace = useCallback(async () => {
 		const data = await api.getBootstrap()
 		setWorkspace({
 			conversations: data.conversations || [],
@@ -58,10 +58,14 @@ export function useWorkspace() {
 			csrfToken: data.csrfToken || current.csrfToken
 		}))
 		if (data.csrfToken) setUserCsrfToken(data.csrfToken)
+		return data
+	}, [setWorkspace, setAuthState])
 
+	const loadWorkspace = useCallback(async (preferredConversationId = null) => {
+		const data = await initWorkspace()
 		const conversationId = preferredConversationId || selectedIdRef.current || data.conversations?.[0]?.id || null
 		await loadConversation(conversationId, data.conversations || [])
-	}, [setWorkspace, setAuthState, loadConversation])
+	}, [initWorkspace, loadConversation])
 
 	const runAction = useCallback(async (key, callback) => {
 		setBusyKey(key)
@@ -242,6 +246,7 @@ export function useWorkspace() {
 		conversationView,
 		streamingMessage,
 		busyKey,
+		initWorkspace,
 		loadWorkspace,
 		loadConversation,
 		createConversation,
