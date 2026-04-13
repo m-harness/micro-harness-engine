@@ -1,3 +1,5 @@
+import { RefreshCw } from 'lucide-react'
+import { useState } from 'react'
 import { useAdmin } from '../../hooks/useAdmin.js'
 import { useI18n } from '../../i18n/context.jsx'
 import { api } from '../../lib/api.js'
@@ -9,13 +11,29 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../..
 export default function ApprovalsPage() {
 	const { data, loadAdmin, runAction } = useAdmin()
 	const { t } = useI18n()
+	const [refreshing, setRefreshing] = useState(false)
 	const approvals = data?.approvals || []
+
+	const handleRefresh = async () => {
+		setRefreshing(true)
+		try {
+			await loadAdmin()
+		} finally {
+			setRefreshing(false)
+		}
+	}
 
 	return (
 		<div className="space-y-6">
-			<div>
-				<h1 className="text-2xl font-semibold tracking-tight">{t('admin.approvals.title')}</h1>
-				<p className="mt-1 text-sm text-muted-foreground">{t('admin.approvals.description')}</p>
+			<div className="flex items-center justify-between">
+				<div>
+					<h1 className="text-2xl font-semibold tracking-tight">{t('admin.approvals.title')}</h1>
+					<p className="mt-1 text-sm text-muted-foreground">{t('admin.approvals.description')}</p>
+				</div>
+				<Button variant="outline" size="sm" onClick={handleRefresh} disabled={refreshing}>
+					<RefreshCw className={`mr-2 h-4 w-4 ${refreshing ? 'animate-spin' : ''}`} />
+					{t('common.refresh')}
+				</Button>
 			</div>
 
 			<Card>
