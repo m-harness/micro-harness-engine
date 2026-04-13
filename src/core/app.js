@@ -1318,7 +1318,12 @@ export class MicroHarnessEngineApp {
 				createMessage({
 					conversationId: conversation.id,
 					role: 'tool',
-					contentText: formatToolTrace(toolCall.name, toolCall.input, toolResult)
+					contentText: formatToolTrace(toolCall.name, toolCall.input, toolResult),
+					content: {
+						toolName: toolCall.name,
+						input: toolCall.input,
+						output: toolResult
+					}
 				})
 				loopMessages.push({
 					role: 'tool',

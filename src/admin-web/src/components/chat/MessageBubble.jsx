@@ -115,8 +115,21 @@ function ToolMessage({ message, t }) {
 							transition={{ duration: 0.2, ease: 'easeInOut' }}
 							className="overflow-hidden"
 						>
-							<div className="border-t border-dashed border-primary/30 px-3 py-2 font-mono text-xs text-foreground whitespace-pre-wrap break-words">
-								{message.contentText || t('chat.emptyMessage')}
+							<div className="border-t border-dashed border-primary/30 px-3 py-2 font-mono text-xs text-foreground whitespace-pre-wrap break-words max-h-96 overflow-y-auto">
+								{message.content ? (
+									<>
+										<div className="mb-2">
+											<span className="font-bold text-primary/70">Input:</span>
+											<pre className="mt-1">{JSON.stringify(message.content.input, null, 2)}</pre>
+										</div>
+										<div>
+											<span className="font-bold text-primary/70">Output:</span>
+											<pre className="mt-1">{typeof message.content.output === 'string' ? message.content.output : JSON.stringify(message.content.output, null, 2)}</pre>
+										</div>
+									</>
+								) : (
+									message.contentText || t('chat.emptyMessage')
+								)}
 							</div>
 						</motion.div>
 					)}
