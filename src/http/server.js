@@ -300,6 +300,16 @@ async function handleApiRequest(req, res) {
 			return
 		}
 
+		// Refresh admin session cookie on authenticated admin API requests
+		if (adminActor?.sessionToken) {
+			res.setHeader('Set-Cookie', serializeCookie(appConfig.adminCookieName, adminActor.sessionToken, {
+				httpOnly: true,
+				sameSite: 'Strict',
+				path: '/',
+				maxAge: 60 * 60 * appConfig.adminSessionTtlHours
+			}))
+		}
+
 		if (req.method === 'GET' && url.pathname === '/api/admin/bootstrap') {
 			requireAdminActor(adminActor)
 			sendJson(res, 200, {
