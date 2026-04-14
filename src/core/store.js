@@ -285,6 +285,22 @@ if (!hasColumn('users', 'system_user_type')) {
 	`)
 }
 
+if (!hasColumn('automations', 'cron_expression')) {
+	db.exec(`ALTER TABLE automations ADD COLUMN cron_expression TEXT;`)
+}
+
+if (!hasColumn('automations', 'scheduled_at')) {
+	db.exec(`ALTER TABLE automations ADD COLUMN scheduled_at TEXT;`)
+}
+
+if (!hasColumn('users', 'max_automations')) {
+	db.exec(`ALTER TABLE users ADD COLUMN max_automations INTEGER NOT NULL DEFAULT 10;`)
+}
+
+if (!hasColumn('conversations', 'parent_conversation_id')) {
+	db.exec(`ALTER TABLE conversations ADD COLUMN parent_conversation_id TEXT;`)
+}
+
 db.exec(`
 	CREATE UNIQUE INDEX IF NOT EXISTS idx_users_login_name
 	ON users(login_name)
@@ -371,7 +387,8 @@ function mapUser(row) {
 		updatedAt: row.updated_at,
 		lastLoginAt: row.last_login_at,
 		passwordHash: row.password_hash,
-		passwordSalt: row.password_salt
+		passwordSalt: row.password_salt,
+		maxAutomations: row.max_automations ?? 10
 	}
 }
 
@@ -410,7 +427,8 @@ function mapConversation(row) {
 		updatedAt: row.updated_at,
 		lastMessageAt: row.last_message_at,
 		pendingApprovalCount: row.pending_approval_count ?? 0,
-		activeRunStatus: row.active_run_status ?? null
+		activeRunStatus: row.active_run_status ?? null,
+		parentConversationId: row.parent_conversation_id ?? null
 	}
 }
 
@@ -489,6 +507,8 @@ function mapAutomation(row) {
 		instruction: row.instruction,
 		scheduleKind: row.schedule_kind,
 		intervalMinutes: row.interval_minutes,
+		cronExpression: row.cron_expression,
+		scheduledAt: row.scheduled_at,
 		status: row.status,
 		nextRunAt: row.next_run_at,
 		lastRunAt: row.last_run_at,
@@ -940,8 +960,9 @@ const insertConversationStmt = db.prepare(`
 		external_ref,
 		created_at,
 		updated_at,
-		last_message_at
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		last_message_at,
+		parent_conversation_id
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `)
 
 const updateConversationStmt = db.prepare(`
@@ -1184,18 +1205,23 @@ const insertAutomationStmt = db.prepare(`
 		instruction,
 		schedule_kind,
 		interval_minutes,
+		cron_expression,
+		scheduled_at,
 		status,
 		next_run_at,
 		created_at,
 		updated_at
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `)
 
 const updateAutomationStmt = db.prepare(`
 	UPDATE automations
 	SET name = ?,
 		instruction = ?,
+		schedule_kind = ?,
 		interval_minutes = ?,
+		cron_expression = ?,
+		scheduled_at = ?,
 		status = ?,
 		next_run_at = ?,
 		last_run_at = ?,
@@ -1995,7 +2021,8 @@ export function createConversation({
 	channelIdentityId,
 	title,
 	source,
-	externalRef = null
+	externalRef = null,
+	parentConversationId = null
 }) {
 	const id = createId()
 	const now = nowIso()
@@ -2009,7 +2036,8 @@ export function createConversation({
 		externalRef,
 		now,
 		now,
-		null
+		null,
+		parentConversationId
 	)
 	return getConversationById(id)
 }
@@ -2289,6 +2317,8 @@ export function createAutomation({
 	instruction,
 	scheduleKind = 'interval',
 	intervalMinutes,
+	cronExpression = null,
+	scheduledAt = null,
 	nextRunAt
 }) {
 	const id = createId()
@@ -2302,6 +2332,8 @@ export function createAutomation({
 		instruction,
 		scheduleKind,
 		intervalMinutes,
+		cronExpression,
+		scheduledAt,
 		'active',
 		nextRunAt,
 		now,
@@ -2314,7 +2346,10 @@ export function updateAutomation({
 	id,
 	name,
 	instruction,
+	scheduleKind,
 	intervalMinutes,
+	cronExpression,
+	scheduledAt,
 	status,
 	nextRunAt,
 	lastRunAt = null
@@ -2323,7 +2358,10 @@ export function updateAutomation({
 	updateAutomationStmt.run(
 		name ?? current.name,
 		instruction ?? current.instruction,
+		scheduleKind ?? current.scheduleKind,
 		intervalMinutes ?? current.intervalMinutes,
+		cronExpression !== undefined ? cronExpression : current.cronExpression,
+		scheduledAt !== undefined ? scheduledAt : current.scheduledAt,
 		status ?? current.status,
 		nextRunAt ?? current.nextRunAt,
 		lastRunAt ?? current.lastRunAt,
@@ -2382,6 +2420,75 @@ export function completeAutomationRun({
 	errorText = null
 }) {
 	completeAutomationRunStmt.run(status, errorText, nowIso(), automationRunId)
+}
+
+const countActiveAutomationsByUserStmt = db.prepare(`
+	SELECT COUNT(*) AS count
+	FROM automations
+	WHERE owner_user_id = ?
+		AND status IN ('active', 'paused')
+`)
+
+export function countActiveAutomationsByUser(userId) {
+	return countActiveAutomationsByUserStmt.get(userId).count
+}
+
+const hasActiveAutomationRunStmt = db.prepare(`
+	SELECT 1 AS found
+	FROM agent_runs
+	WHERE automation_id = ?
+		AND status IN ('queued', 'running', 'waiting_approval', 'recovering')
+	LIMIT 1
+`)
+
+export function hasActiveAutomationRun(automationId) {
+	return Boolean(hasActiveAutomationRunStmt.get(automationId))
+}
+
+const listActiveAutomationsStmt = db.prepare(`
+	SELECT *
+	FROM automations
+	WHERE status = 'active'
+`)
+
+export function listActiveAutomations() {
+	return listActiveAutomationsStmt.all().map(mapAutomation)
+}
+
+const listAutomationConversationsStmt = db.prepare(`
+	SELECT c.*
+	FROM conversations c
+	INNER JOIN automation_runs ar ON ar.conversation_id = c.id
+	WHERE ar.automation_id = ?
+		AND c.status = 'active'
+	ORDER BY c.created_at ASC
+`)
+
+export function listAutomationConversations(automationId) {
+	return listAutomationConversationsStmt.all(automationId).map(mapConversation)
+}
+
+const archiveConversationStmt = db.prepare(`
+	UPDATE conversations
+	SET status = 'archived',
+		updated_at = ?
+	WHERE id = ?
+`)
+
+export function archiveConversation(conversationId) {
+	archiveConversationStmt.run(nowIso(), conversationId)
+}
+
+const updateUserMaxAutomationsStmt = db.prepare(`
+	UPDATE users
+	SET max_automations = ?,
+		updated_at = ?
+	WHERE id = ?
+`)
+
+export function updateUserMaxAutomations(userId, max) {
+	updateUserMaxAutomationsStmt.run(max, nowIso(), userId)
+	return getUserById(userId)
 }
 
 export function getOrCreateRemoteUser({

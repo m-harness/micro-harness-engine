@@ -424,7 +424,9 @@ async function handleApiRequest(req, res) {
 					actor: authenticated,
 					name: requireString(body.name, 'name', { maxLength: 200 }),
 					instruction: requireString(body.instruction, 'instruction'),
-					intervalMinutes: requireInteger(body.intervalMinutes, 'intervalMinutes')
+					scheduleKind: body.scheduleKind || undefined,
+					cronExpression: body.cronExpression || undefined,
+					scheduledAt: body.scheduledAt || undefined
 				})
 			})
 			return
@@ -436,24 +438,48 @@ async function handleApiRequest(req, res) {
 			requireCsrf(authenticated, req)
 			const body = await readJsonBody(req)
 			const nextStatus = String(body.status || '').trim().toLowerCase()
-			let data
+
 			if (nextStatus === 'paused') {
-				data = app.pauseAutomation({
-					automationId: automationParams.automationId,
-					actor: authenticated
+				sendJson(res, 200, {
+					ok: true,
+					data: app.pauseAutomation({
+						automationId: automationParams.automationId,
+						actor: authenticated
+					})
 				})
-			} else if (nextStatus === 'active') {
-				data = app.resumeAutomation({
-					automationId: automationParams.automationId,
-					actor: authenticated
+				return
+			}
+
+			if (nextStatus === 'active') {
+				sendJson(res, 200, {
+					ok: true,
+					data: app.resumeAutomation({
+						automationId: automationParams.automationId,
+						actor: authenticated
+					})
 				})
-			} else {
-				throw new HttpError(400, 'status must be paused or active.')
+				return
+			}
+
+			// Field editing (name, instruction, scheduleKind, etc.)
+			const updates = {}
+			if (body.name !== undefined) updates.name = body.name
+			if (body.instruction !== undefined) updates.instruction = body.instruction
+			if (body.scheduleKind !== undefined) updates.scheduleKind = body.scheduleKind
+			if (body.cronExpression !== undefined) updates.cronExpression = body.cronExpression
+			if (body.scheduledAt !== undefined) updates.scheduledAt = body.scheduledAt
+
+			if (Object.keys(updates).length === 0) {
+				throw new HttpError(400, 'No updates provided.')
 			}
 
 			sendJson(res, 200, {
 				ok: true,
-				data
+				data: app.editAutomation({
+					automationId: automationParams.automationId,
+					actor: authenticated,
+					updates
+				})
 			})
 			return
 		}
@@ -577,14 +603,18 @@ async function handleApiRequest(req, res) {
 		if (req.method === 'PATCH' && adminUserParams) {
 			requireAdminCsrf(adminActor, req)
 			const body = await readJsonBody(req)
+			let data = authService.updateLocalUser(adminUserParams.userId, {
+				loginName: body.loginName,
+				displayName: body.displayName,
+				role: body.role,
+				status: body.status
+			})
+			if (body.maxAutomations !== undefined) {
+				data = app.adminUpdateUserMaxAutomations(adminUserParams.userId, body.maxAutomations)
+			}
 			sendJson(res, 200, {
 				ok: true,
-				data: authService.updateLocalUser(adminUserParams.userId, {
-					loginName: body.loginName,
-					displayName: body.displayName,
-					role: body.role,
-					status: body.status
-				})
+				data
 			})
 			return
 		}
@@ -759,13 +789,38 @@ async function handleApiRequest(req, res) {
 			requireAdminCsrf(adminActor, req)
 			const body = await readJsonBody(req)
 			const nextStatus = String(body.status || '').trim().toLowerCase()
-			if (nextStatus !== 'paused') {
-				throw new HttpError(400, 'status must be paused.')
+
+			if (nextStatus === 'paused') {
+				sendJson(res, 200, {
+					ok: true,
+					data: app.adminPauseAutomation(adminAutomationParams.automationId)
+				})
+				return
+			}
+
+			if (nextStatus === 'active') {
+				sendJson(res, 200, {
+					ok: true,
+					data: app.adminResumeAutomation(adminAutomationParams.automationId)
+				})
+				return
+			}
+
+			// Field editing (name, instruction, scheduleKind, etc.)
+			const updates = {}
+			if (body.name !== undefined) updates.name = body.name
+			if (body.instruction !== undefined) updates.instruction = body.instruction
+			if (body.scheduleKind !== undefined) updates.scheduleKind = body.scheduleKind
+			if (body.cronExpression !== undefined) updates.cronExpression = body.cronExpression
+			if (body.scheduledAt !== undefined) updates.scheduledAt = body.scheduledAt
+
+			if (Object.keys(updates).length === 0 && !nextStatus) {
+				throw new HttpError(400, 'No updates provided.')
 			}
 
 			sendJson(res, 200, {
 				ok: true,
-				data: app.adminPauseAutomation(adminAutomationParams.automationId)
+				data: app.adminEditAutomation(adminAutomationParams.automationId, updates)
 			})
 			return
 		}

@@ -1,8 +1,9 @@
 import { Menu, Plus, LogOut } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Outlet } from 'react-router-dom'
 import { useAuth } from '../../hooks/useAuth.js'
 import { useI18n } from '../../i18n/context.jsx'
+import { useSSEConnection } from '../../hooks/useSSEConnection.js'
 import { useWorkspace } from '../../hooks/useWorkspace.js'
 import { ConversationSidebar } from '../chat/ConversationSidebar.jsx'
 import { LanguageToggle } from './LanguageToggle.jsx'
@@ -66,7 +67,14 @@ function SidebarContent({ onSelect }) {
 
 export default function WorkspaceLayout() {
 	const { t } = useI18n()
+	const { initWorkspace } = useWorkspace()
 	const [sidebarOpen, setSidebarOpen] = useState(false)
+
+	useSSEConnection()
+
+	useEffect(() => {
+		initWorkspace().catch(() => {})
+	}, [initWorkspace])
 
 	return (
 		<div className="flex h-screen bg-background">

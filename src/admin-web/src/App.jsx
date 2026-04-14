@@ -1,6 +1,8 @@
 import { lazy, Suspense, useEffect } from 'react'
 import { Navigate, Route, Routes, useNavigate, useLocation } from 'react-router-dom'
 import { ProtectedRoute } from './components/shared/ProtectedRoute.jsx'
+import { ApiStatusBanner } from './components/shared/ApiStatusBanner.jsx'
+import { useApiHealth } from './hooks/useApiHealth.js'
 import { setNavigateRef } from './lib/navigateRef.js'
 
 const LoginPage = lazy(() => import('./pages/workspace/LoginPage.jsx'))
@@ -40,9 +42,12 @@ function NavigateInjector() {
 }
 
 export default function App() {
+	useApiHealth()
+
 	return (
 		<Suspense fallback={<Loading />}>
 			<NavigateInjector />
+			<ApiStatusBanner />
 			<Routes>
 				<Route path="/login" element={<LoginPage />} />
 				<Route path="/admin/login" element={<AdminLoginPage />} />

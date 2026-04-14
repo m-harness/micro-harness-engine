@@ -1,15 +1,12 @@
 import { useAtom } from 'jotai'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import { api } from '../lib/api.js'
-import { createSSEConnection } from '../lib/sse.js'
 import { setUserCsrfToken } from '../lib/axios.js'
 import { authStateAtom } from '../stores/auth.js'
 import { workspaceBusyKeyAtom } from '../stores/ui.js'
 import { conversationViewAtom, selectedConversationIdAtom, streamingMessageAtom, workspaceAtom } from '../stores/workspace.js'
-
-const FALLBACK_REFRESH_MS = 4000
 
 export function useWorkspace() {
 	const [authState, setAuthState] = useAtom(authStateAtom)
@@ -18,7 +15,6 @@ export function useWorkspace() {
 	const [conversationView, setConversationView] = useAtom(conversationViewAtom)
 	const [streamingMessage, setStreamingMessage] = useAtom(streamingMessageAtom)
 	const [busyKey, setBusyKey] = useAtom(workspaceBusyKeyAtom)
-	const [useSSE, setUseSSE] = useState(true)
 	const navigate = useNavigate()
 	const selectedIdRef = useRef(selectedConversationId)
 	selectedIdRef.current = selectedConversationId
@@ -42,7 +38,7 @@ export function useWorkspace() {
 		}
 	}, [setSelectedConversationId, setConversationView])
 
-	const loadWorkspace = useCallback(async (preferredConversationId = null) => {
+	const initWorkspace = useCallback(async () => {
 		const data = await api.getBootstrap()
 		setWorkspace({
 			conversations: data.conversations || [],
@@ -54,10 +50,14 @@ export function useWorkspace() {
 			csrfToken: data.csrfToken || current.csrfToken
 		}))
 		if (data.csrfToken) setUserCsrfToken(data.csrfToken)
+		return data
+	}, [setWorkspace, setAuthState])
 
+	const loadWorkspace = useCallback(async (preferredConversationId = null) => {
+		const data = await initWorkspace()
 		const conversationId = preferredConversationId || selectedIdRef.current || data.conversations?.[0]?.id || null
 		await loadConversation(conversationId, data.conversations || [])
-	}, [setWorkspace, setAuthState, loadConversation])
+	}, [initWorkspace, loadConversation])
 
 	const runAction = useCallback(async (key, callback) => {
 		setBusyKey(key)
@@ -114,7 +114,7 @@ export function useWorkspace() {
 		})
 	}, [runAction, loadWorkspace])
 
-	const createAutomation = useCallback(async ({ name, instruction, intervalMinutes }) => {
+	const createAutomation = useCallback(async ({ name, instruction, scheduleKind, cronExpression, scheduledAt }) => {
 		if (!selectedIdRef.current) {
 			toast.error('Create or select a conversation first.')
 			return
@@ -123,7 +123,9 @@ export function useWorkspace() {
 			await api.createAutomation(selectedIdRef.current, {
 				name,
 				instruction,
-				intervalMinutes: Number.parseInt(intervalMinutes, 10)
+				scheduleKind,
+				cronExpression,
+				scheduledAt
 			})
 			await loadWorkspace(selectedIdRef.current)
 		})
@@ -139,6 +141,13 @@ export function useWorkspace() {
 	const runAutomationNow = useCallback(async (automationId) => {
 		await runAction(`run-${automationId}`, async () => {
 			await api.runAutomationNow(automationId)
+			await loadWorkspace(selectedIdRef.current)
+		})
+	}, [runAction, loadWorkspace])
+
+	const editAutomation = useCallback(async (automationId, updates) => {
+		await runAction(`edit-${automationId}`, async () => {
+			await api.editAutomation(automationId, updates)
 			await loadWorkspace(selectedIdRef.current)
 		})
 	}, [runAction, loadWorkspace])
@@ -166,69 +175,13 @@ export function useWorkspace() {
 		})
 	}, [runAction, loadWorkspace])
 
-	// SSE connection for real-time streaming
-	useEffect(() => {
-		if (!authState.user || !selectedConversationId || !useSSE) return
-
-		const sse = createSSEConnection(
-			`/api/conversations/${encodeURIComponent(selectedConversationId)}/stream`,
-			{
-				onEvent: (event) => {
-					switch (event.type) {
-						case 'delta':
-							if (event.data?.type === 'text_delta' && event.data?.text) {
-								setStreamingMessage(prev => ({
-									text: (prev?.text || '') + event.data.text,
-									runId: event.data.runId
-								}))
-							}
-							break
-						case 'run.completed':
-						case 'run.cancelled':
-						case 'run.failed':
-							setStreamingMessage(null)
-							loadWorkspace(selectedConversationId).catch(() => {})
-							break
-						case 'approval.requested':
-							loadWorkspace(selectedConversationId).catch(() => {})
-							break
-					}
-				},
-				onError: () => {
-					setUseSSE(false)
-				},
-				onClose: () => {}
-			}
-		)
-
-		return () => sse.close()
-	}, [authState.user, selectedConversationId, useSSE, setStreamingMessage, loadWorkspace])
-
-	// Fallback polling when SSE is unavailable
-	useEffect(() => {
-		if (!authState.user || useSSE) return
-		let cancelled = false
-		const timer = window.setInterval(async () => {
-			if (cancelled) return
-			try {
-				await loadWorkspace(selectedIdRef.current)
-			} catch {
-				// 401 is handled by the axios interceptor.
-				// Other errors are silently ignored during background refresh.
-			}
-		}, FALLBACK_REFRESH_MS)
-		return () => {
-			cancelled = true
-			window.clearInterval(timer)
-		}
-	}, [authState.user, useSSE, loadWorkspace])
-
 	return {
 		workspace,
 		selectedConversationId,
 		conversationView,
 		streamingMessage,
 		busyKey,
+		initWorkspace,
 		loadWorkspace,
 		loadConversation,
 		createConversation,
@@ -237,6 +190,7 @@ export function useWorkspace() {
 		cancelRun,
 		handleApproval,
 		createAutomation,
+		editAutomation,
 		updateAutomationStatus,
 		runAutomationNow,
 		deleteAutomation,

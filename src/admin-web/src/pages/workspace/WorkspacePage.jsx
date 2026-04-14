@@ -1,6 +1,8 @@
 import { useEffect } from 'react'
 import { useParams } from 'react-router-dom'
+import { ArrowUpRight } from 'lucide-react'
 import { useWorkspace } from '../../hooks/useWorkspace.js'
+import { useI18n } from '../../i18n/context.jsx'
 import { ChatInput } from '../../components/chat/ChatInput.jsx'
 import { MessageList } from '../../components/chat/MessageList.jsx'
 import { ApprovalsPanel } from '../../components/workspace/ApprovalsPanel.jsx'
@@ -11,7 +13,8 @@ import { formatDate } from '../../lib/format.js'
 
 export default function WorkspacePage() {
 	const { conversationId } = useParams()
-	const { conversationView, loadConversation, workspace } = useWorkspace()
+	const { t } = useI18n()
+	const { conversationView, loadConversation, workspace, selectConversation } = useWorkspace()
 
 	useEffect(() => {
 		if (conversationId) {
@@ -37,6 +40,19 @@ export default function WorkspacePage() {
 							<span className="uppercase tracking-wide">{conversation.source}</span>
 							<span>·</span>
 							<span>{formatDate(conversation.createdAt)}</span>
+							{conversation.parentConversationId && (
+								<>
+									<span>·</span>
+									<button
+										type="button"
+										onClick={() => selectConversation(conversation.parentConversationId)}
+										className="inline-flex items-center gap-0.5 text-primary hover:underline"
+									>
+										{t('chat.parentConversation')}
+										<ArrowUpRight className="h-3 w-3" />
+									</button>
+								</>
+							)}
 						</div>
 					</div>
 				)}
