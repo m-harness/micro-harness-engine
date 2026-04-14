@@ -112,8 +112,12 @@ export class AdminAuthService {
 			return null
 		}
 
+		// Touch: extend session expiry on each request
+		session.expiresAt = addHours(new Date(), appConfig.adminSessionTtlHours).toISOString()
+
 		return {
 			authType: 'admin-session',
+			sessionToken,
 			csrfToken: session.csrfToken,
 			expiresAt: session.expiresAt,
 			admin: true,
