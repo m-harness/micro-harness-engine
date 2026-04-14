@@ -114,7 +114,7 @@ export function useWorkspace() {
 		})
 	}, [runAction, loadWorkspace])
 
-	const createAutomation = useCallback(async ({ name, instruction, intervalMinutes }) => {
+	const createAutomation = useCallback(async ({ name, instruction, scheduleKind, cronExpression, scheduledAt }) => {
 		if (!selectedIdRef.current) {
 			toast.error('Create or select a conversation first.')
 			return
@@ -123,7 +123,9 @@ export function useWorkspace() {
 			await api.createAutomation(selectedIdRef.current, {
 				name,
 				instruction,
-				intervalMinutes: Number.parseInt(intervalMinutes, 10)
+				scheduleKind,
+				cronExpression,
+				scheduledAt
 			})
 			await loadWorkspace(selectedIdRef.current)
 		})
@@ -139,6 +141,13 @@ export function useWorkspace() {
 	const runAutomationNow = useCallback(async (automationId) => {
 		await runAction(`run-${automationId}`, async () => {
 			await api.runAutomationNow(automationId)
+			await loadWorkspace(selectedIdRef.current)
+		})
+	}, [runAction, loadWorkspace])
+
+	const editAutomation = useCallback(async (automationId, updates) => {
+		await runAction(`edit-${automationId}`, async () => {
+			await api.editAutomation(automationId, updates)
 			await loadWorkspace(selectedIdRef.current)
 		})
 	}, [runAction, loadWorkspace])
@@ -181,6 +190,7 @@ export function useWorkspace() {
 		cancelRun,
 		handleApproval,
 		createAutomation,
+		editAutomation,
 		updateAutomationStatus,
 		runAutomationNow,
 		deleteAutomation,

@@ -12,11 +12,14 @@ export function formatDate(value) {
 	}
 }
 
-export function formatInterval(minutes) {
-	if (!minutes) return 'Manual'
-	if (minutes < 60) return `Every ${minutes} min`
-	if (minutes % 60 === 0) return `Every ${minutes / 60} hr`
-	return `Every ${minutes} min`
+export function formatSchedule(automation) {
+	if (automation.scheduleKind === 'cron') {
+		return `Cron: ${automation.cronExpression || '—'}`
+	}
+	if (automation.scheduleKind === 'once') {
+		return `Once: ${formatDate(automation.scheduledAt)}`
+	}
+	return '—'
 }
 
 export function formatJson(value) {

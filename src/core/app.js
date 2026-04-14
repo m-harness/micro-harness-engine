@@ -9,6 +9,7 @@ import { HttpError } from './http.js'
 import { AutomationService } from './automationService.js'
 import { PolicyService } from './policyService.js'
 import {
+	archiveConversation,
 	createAgentRun,
 	createApproval,
 	createConversation,
@@ -27,6 +28,7 @@ import {
 	getRecentFailedRunForConversation,
 	getRunToolCall,
 	listAllRecoverableRuns,
+	listAutomationConversations,
 	listAutomationsByConversation,
 	listAutomations,
 	listConversationsForUser,
@@ -35,7 +37,9 @@ import {
 	listPendingApprovalsByConversation,
 	saveRunToolCall,
 	updateAgentRun,
-	updateConversation
+	updateAutomation,
+	updateConversation,
+	updateUserMaxAutomations
 } from './store.js'
 import { createToolRegistry } from './tools/registry.js'
 import { createSkillRegistry } from './skillRegistry.js'
@@ -229,7 +233,6 @@ export class MicroHarnessEngineApp {
 		}
 		this.policyService = null
 		this.skillRegistry = createSkillRegistry()
-		this.automationInterval = null
 	}
 
 	async init() {
@@ -275,20 +278,11 @@ export class MicroHarnessEngineApp {
 	}
 
 	startAutomationScheduler() {
-		if (this.automationInterval) {
-			return
-		}
-
-		this.automationInterval = setInterval(() => {
-			this.automationService.pollDueAutomations()
-		}, appConfig.automationTickMs)
+		this.automationService.startScheduler()
 	}
 
 	stopAutomationScheduler() {
-		if (this.automationInterval) {
-			clearInterval(this.automationInterval)
-			this.automationInterval = null
-		}
+		this.automationService.stopScheduler()
 	}
 
 	// ── Cancel / Abort ──
@@ -527,7 +521,9 @@ export class MicroHarnessEngineApp {
 		actor,
 		name,
 		instruction,
-		intervalMinutes
+		scheduleKind,
+		cronExpression,
+		scheduledAt
 	}) {
 		const conversation = getConversationById(conversationId)
 		if (!isConversationOwner(conversation, actor)) {
@@ -540,7 +536,9 @@ export class MicroHarnessEngineApp {
 			conversationId: conversation.id,
 			name,
 			instruction,
-			intervalMinutes
+			scheduleKind,
+			cronExpression,
+			scheduledAt
 		})
 		createConversationEvent({
 			conversationId: conversation.id,
@@ -577,6 +575,18 @@ export class MicroHarnessEngineApp {
 		this.automationService.deleteAutomation({
 			automationId,
 			userId: actor.user.id
+		})
+	}
+
+	editAutomation({
+		automationId,
+		actor,
+		updates
+	}) {
+		return this.automationService.editAutomationAsUser({
+			automationId,
+			userId: actor.user.id,
+			...updates
 		})
 	}
 
@@ -624,6 +634,22 @@ export class MicroHarnessEngineApp {
 
 	adminDeleteAutomation(automationId) {
 		this.automationService.adminDeleteAutomation(automationId)
+	}
+
+	adminResumeAutomation(automationId) {
+		return this.automationService.adminResumeAutomation(automationId)
+	}
+
+	adminEditAutomation(automationId, updates) {
+		return this.automationService.adminEditAutomation(automationId, updates)
+	}
+
+	adminUpdateUserMaxAutomations(userId, max) {
+		const parsed = Number.parseInt(String(max ?? ''), 10)
+		if (!Number.isInteger(parsed) || parsed < 1) {
+			throw new HttpError(400, 'maxAutomations must be a positive integer.')
+		}
+		return updateUserMaxAutomations(userId, parsed)
 	}
 
 	// --- Skills Admin CRUD ---
@@ -873,10 +899,25 @@ export class MicroHarnessEngineApp {
 	}
 
 	enqueueAutomationRun(automation) {
-		const conversation = getConversationById(automation.conversationId)
-		if (!conversation || getActiveRunForConversation(conversation.id)) {
-			return
-		}
+		const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
+		const conversation = createConversation({
+			userId: automation.ownerUserId,
+			channelIdentityId: automation.channelIdentityId,
+			title: `[Auto] ${automation.name} - ${timestamp}`,
+			source: 'automation',
+			parentConversationId: automation.conversationId
+		})
+		createConversationEvent({
+			conversationId: conversation.id,
+			kind: 'conversation.created',
+			payload: {
+				title: conversation.title,
+				source: 'automation',
+				automationId: automation.id
+			}
+		})
+
+		this.cleanupAutomationConversations(automation.id)
 
 		const run = createAgentRun({
 			conversationId: conversation.id,
@@ -902,6 +943,27 @@ export class MicroHarnessEngineApp {
 			}
 		})
 		void this.processRun(run.id)
+	}
+
+	cleanupAutomationConversations(automationId) {
+		const conversations = listAutomationConversations(automationId)
+		const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()
+
+		// Archive conversations older than 30 days
+		for (const conv of conversations) {
+			if (conv.createdAt < thirtyDaysAgo) {
+				archiveConversation(conv.id)
+			}
+		}
+
+		// If still more than 50 active, archive oldest
+		const remaining = conversations.filter(c => c.createdAt >= thirtyDaysAgo)
+		if (remaining.length > 50) {
+			const toArchive = remaining.slice(0, remaining.length - 50)
+			for (const conv of toArchive) {
+				archiveConversation(conv.id)
+			}
+		}
 	}
 
 	async processRun(runId) {

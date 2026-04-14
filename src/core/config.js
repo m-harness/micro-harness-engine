@@ -31,6 +31,7 @@ export const appConfig = {
 	discordApplicationId: process.env.DISCORD_APPLICATION_ID || '',
 	bootstrapSecret: process.env.ROOT_BOOTSTRAP_SECRET || '',
 	adminRuntimePassword: process.env.ADMIN_RUNTIME_PASSWORD || '',
+	timezone: process.env.MHE_TIMEZONE || 'Asia/Tokyo',
 	automationTickMs: parseInteger(process.env.AUTOMATION_TICK_MS, 30_000),
 	braveSearchApiKey: process.env.BRAVE_SEARCH_API_KEY || '',
 	maxBodyBytes: parseInteger(process.env.MAX_BODY_BYTES, 1_048_576),

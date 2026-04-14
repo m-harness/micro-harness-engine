@@ -28,11 +28,14 @@ export const api = {
 	postConversationMessage(conversationId, { text }) {
 		return http.post(`/api/conversations/${encodeURIComponent(conversationId)}/messages`, { text })
 	},
-	createAutomation(conversationId, { name, instruction, intervalMinutes }) {
-		return http.post(`/api/conversations/${encodeURIComponent(conversationId)}/automations`, { name, instruction, intervalMinutes })
+	createAutomation(conversationId, { name, instruction, scheduleKind, cronExpression, scheduledAt }) {
+		return http.post(`/api/conversations/${encodeURIComponent(conversationId)}/automations`, { name, instruction, scheduleKind, cronExpression, scheduledAt })
 	},
 	updateAutomationStatus(automationId, { status }) {
 		return http.patch(`/api/automations/${encodeURIComponent(automationId)}`, { status })
+	},
+	editAutomation(automationId, updates) {
+		return http.patch(`/api/automations/${encodeURIComponent(automationId)}`, updates)
 	},
 	deleteAutomation(automationId) {
 		return http.delete(`/api/automations/${encodeURIComponent(automationId)}`)
@@ -116,8 +119,17 @@ export const api = {
 	adminPauseAutomation(automationId) {
 		return http.patch(`/api/admin/automations/${encodeURIComponent(automationId)}`, { status: 'paused' })
 	},
+	adminResumeAutomation(automationId) {
+		return http.patch(`/api/admin/automations/${encodeURIComponent(automationId)}`, { status: 'active' })
+	},
+	adminEditAutomation(automationId, updates) {
+		return http.patch(`/api/admin/automations/${encodeURIComponent(automationId)}`, updates)
+	},
 	adminDeleteAutomation(automationId) {
 		return http.delete(`/api/admin/automations/${encodeURIComponent(automationId)}`)
+	},
+	adminUpdateUserMaxAutomations(userId, { maxAutomations }) {
+		return http.patch(`/api/admin/users/${encodeURIComponent(userId)}`, { maxAutomations })
 	},
 	adminListProtectionRules() {
 		return http.get('/api/admin/protection-rules')

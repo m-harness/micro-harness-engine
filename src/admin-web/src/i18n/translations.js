@@ -369,10 +369,12 @@ export const translations = {
 			noSession: 'No session selected',
 			noSessionDescription: 'Pick a conversation from the sidebar or create a new one.',
 			readyTitle: 'Ready when you are',
-			readyDescription: 'Send a message to start a personal agent run inside this session.'
+			readyDescription: 'Send a message to start a personal agent run inside this session.',
+			parentConversation: 'Parent session'
 		},
 		sidebar: {
-			noConversations: 'No conversations yet. Start a new chat.'
+			noConversations: 'No conversations yet. Start a new chat.',
+			automations: 'Automations'
 		},
 		panels: {
 			approvalTitle: 'Approvals',
@@ -401,6 +403,32 @@ export const translations = {
 			serverStarting: 'Server is starting up',
 			serverStartingDescription: 'The API server is not yet available. It will connect automatically once the server is ready.',
 			autoRetry: 'Retrying in {seconds}s...'
+		},
+		cron: {
+			preset: 'Presets',
+			everyMinute: 'Every minute',
+			every5Minutes: 'Every 5 min',
+			everyHour: 'Every hour',
+			dailyMidnight: 'Daily 0:00',
+			daily9am: 'Daily 9:00',
+			weekdays9am: 'Weekdays 9:00',
+			weeklySunday: 'Weekly Sun 0:00',
+			monthly1st: 'Monthly 1st 0:00',
+			minute: 'Minute',
+			hour: 'Hour',
+			day: 'Day',
+			month: 'Month',
+			weekday: 'Weekday',
+			all: 'All',
+			specific: 'Specific',
+			range: 'Range',
+			step: 'Step',
+			nextRuns: 'Next runs',
+			directInput: 'Direct input',
+			reset: 'Reset',
+			expression: 'Cron expression',
+			detailSettings: 'Detail settings',
+			sun: 'Sun', mon: 'Mon', tue: 'Tue', wed: 'Wed', thu: 'Thu', fri: 'Fri', sat: 'Sat',
 		},
 		shared: {
 			chooseReplacement: 'Choose a replacement',
@@ -776,10 +804,12 @@ export const translations = {
 			noSession: 'セッションが選択されていません',
 			noSessionDescription: 'サイドバーから会話を選択するか、新しい会話を作成してください。',
 			readyTitle: 'お任せください',
-			readyDescription: 'メッセージを送信してこのセッションでエージェントを開始します。'
+			readyDescription: 'メッセージを送信してこのセッションでエージェントを開始します。',
+			parentConversation: '元の会話へ'
 		},
 		sidebar: {
-			noConversations: '会話がまだありません。新しいチャットを始めましょう。'
+			noConversations: '会話がまだありません。新しいチャットを始めましょう。',
+			automations: 'オートメーション'
 		},
 		panels: {
 			approvalTitle: '承認',
@@ -808,6 +838,32 @@ export const translations = {
 			serverStarting: 'サーバーを起動中',
 			serverStartingDescription: 'APIサーバーがまだ利用できません。サーバーの準備ができ次第、自動的に接続します。',
 			autoRetry: '{seconds}秒後にリトライ...'
+		},
+		cron: {
+			preset: 'プリセット',
+			everyMinute: '毎分',
+			every5Minutes: '5分ごと',
+			everyHour: '毎時',
+			dailyMidnight: '毎日0時',
+			daily9am: '毎日9時',
+			weekdays9am: '平日9時',
+			weeklySunday: '毎週日曜0時',
+			monthly1st: '毎月1日0時',
+			minute: '分',
+			hour: '時',
+			day: '日',
+			month: '月',
+			weekday: '曜日',
+			all: 'すべて',
+			specific: '特定値',
+			range: '範囲',
+			step: '間隔',
+			nextRuns: '次回実行予定',
+			directInput: '直接入力',
+			reset: 'リセット',
+			expression: 'Cron式',
+			detailSettings: '詳細設定',
+			sun: '日', mon: '月', tue: '火', wed: '水', thu: '木', fri: '金', sat: '土',
 		},
 		shared: {
 			chooseReplacement: '代替を選択',
