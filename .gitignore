@@ -20,6 +20,7 @@ Thumbs.db
 
 memo.md
 .claude/
+.playwright-mcp/
 
 OSS公開手順.md
 dev/

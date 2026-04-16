@@ -11,6 +11,8 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Input } from '../../components/ui/input.jsx'
 import { cn } from '../../lib/utils.js'
 
+const MCP_NAME_RE = /^[a-zA-Z0-9@._/-]+$/
+
 function mcpStateClass(state) {
 	switch (state) {
 		case 'ready': return 'border-emerald-200 bg-emerald-100 text-emerald-800 dark:border-emerald-800 dark:bg-emerald-950 dark:text-emerald-300'
@@ -35,6 +37,29 @@ function buildConfig(form) {
 	return config
 }
 
+function validateForm(form, isCreate) {
+	const errors = {}
+	if (isCreate) {
+		const name = form.name.trim()
+		if (!name) {
+			errors.name = 'Server name is required.'
+		} else if (!MCP_NAME_RE.test(name)) {
+			errors.name = 'Only alphanumeric characters, @, ., /, _, - are allowed (no spaces or Japanese characters).'
+		}
+	}
+	if (form.mode === 'stdio') {
+		if (!form.command.trim()) errors.command = 'Command is required.'
+	} else {
+		if (!form.url.trim()) errors.url = 'URL is required.'
+	}
+	return errors
+}
+
+function FieldError({ message }) {
+	if (!message) return null
+	return <p className="text-xs text-destructive">{message}</p>
+}
+
 export default function McpServersPage() {
 	const { t } = useI18n()
 	const { data, loadAdmin, pollUntilMcpSettled, runAction, busyKey } = useAdmin()
@@ -42,6 +67,8 @@ export default function McpServersPage() {
 	const [newServer, setNewServer] = useState({ name: '', mode: 'stdio', command: '', args: '', env: [], url: '', headers: [] })
 	const [createOpen, setCreateOpen] = useState(false)
 	const [editing, setEditing] = useState(null)
+	const [createErrors, setCreateErrors] = useState({})
+	const [editErrors, setEditErrors] = useState({})
 
 	return (
 		<div className="space-y-6">
@@ -88,13 +115,14 @@ export default function McpServersPage() {
 								)}
 								<div className="mt-3 flex flex-wrap gap-2">
 									<Button onClick={() => {
-										if (isEditing) { setEditing(null); return }
+										if (isEditing) { setEditing(null); setEditErrors({}); return }
 										const cfg = server.config || {}
 										setEditing({
 											name: server.name, mode: cfg.url ? 'http' : 'stdio',
 											command: cfg.command || '', args: (cfg.args || []).join(', '),
 											env: [], url: cfg.url || '', headers: []
 										})
+										setEditErrors({})
 									}} size="sm" variant="outline">{isEditing ? t('common.cancel') : t('common.edit')}</Button>
 									<Button onClick={() => runAction(`reconnect-mcp-${server.name}`, async () => {
 										await api.adminReconnectMcpServer(server.name)
@@ -123,7 +151,8 @@ export default function McpServersPage() {
 											<>
 												<div className="space-y-2">
 													<label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{t('admin.mcpServers.command')}</label>
-													<Input onChange={e => setEditing(c => ({ ...c, command: e.target.value }))} value={editing.command} />
+													<Input className={editErrors.command ? 'border-destructive' : ''} onChange={e => { setEditing(c => ({ ...c, command: e.target.value })); setEditErrors(c => ({ ...c, command: '' })) }} value={editing.command} />
+													<FieldError message={editErrors.command} />
 												</div>
 												<div className="space-y-2">
 													<label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{t('admin.mcpServers.argsCsv')}</label>
@@ -138,7 +167,8 @@ export default function McpServersPage() {
 											<>
 												<div className="space-y-2">
 													<label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{t('admin.mcpServers.url')}</label>
-													<Input onChange={e => setEditing(c => ({ ...c, url: e.target.value }))} value={editing.url} />
+													<Input className={editErrors.url ? 'border-destructive' : ''} onChange={e => { setEditing(c => ({ ...c, url: e.target.value })); setEditErrors(c => ({ ...c, url: '' })) }} value={editing.url} />
+													<FieldError message={editErrors.url} />
 												</div>
 												<div className="space-y-2">
 													<label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{t('admin.mcpServers.headers')}</label>
@@ -146,12 +176,18 @@ export default function McpServersPage() {
 												</div>
 											</>
 										)}
-										<Button onClick={() => runAction(`update-mcp-${server.name}`, async () => {
-											await api.adminUpdateMcpServer(server.name, { config: buildConfig(editing) })
-											setEditing(null)
-											await loadAdmin()
-											await pollUntilMcpSettled(server.name)
-										})}>{t('common.saveChanges')}</Button>
+										<Button onClick={() => {
+											const errors = validateForm(editing, false)
+											setEditErrors(errors)
+											if (Object.keys(errors).length > 0) return
+											runAction(`update-mcp-${server.name}`, async () => {
+												await api.adminUpdateMcpServer(server.name, { config: buildConfig(editing) })
+												setEditing(null)
+												setEditErrors({})
+												await loadAdmin()
+												await pollUntilMcpSettled(server.name)
+											})
+										}}>{t('common.saveChanges')}</Button>
 									</div>
 								)}
 							</div>
@@ -160,7 +196,7 @@ export default function McpServersPage() {
 				</CardContent>
 			</Card>
 
-			<Dialog open={createOpen} onOpenChange={setCreateOpen}>
+			<Dialog open={createOpen} onOpenChange={open => { setCreateOpen(open); if (!open) setCreateErrors({}) }}>
 				<DialogContent className="max-w-2xl">
 					<DialogHeader>
 						<DialogTitle>{t('admin.mcpServers.addServer')}</DialogTitle>
@@ -169,7 +205,8 @@ export default function McpServersPage() {
 					<div className="space-y-4">
 						<div className="space-y-2">
 							<label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{t('common.name')}</label>
-							<Input onChange={e => setNewServer(c => ({ ...c, name: e.target.value }))} placeholder="e.g. my-tools" value={newServer.name} />
+							<Input className={createErrors.name ? 'border-destructive' : ''} onChange={e => { setNewServer(c => ({ ...c, name: e.target.value })); setCreateErrors(c => ({ ...c, name: '' })) }} placeholder="e.g. playwright-mcp" value={newServer.name} />
+							<FieldError message={createErrors.name} />
 						</div>
 						<div className="space-y-2">
 							<label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{t('admin.mcpServers.mode')}</label>
@@ -182,11 +219,12 @@ export default function McpServersPage() {
 							<>
 								<div className="space-y-2">
 									<label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{t('admin.mcpServers.command')}</label>
-									<Input onChange={e => setNewServer(c => ({ ...c, command: e.target.value }))} placeholder="e.g. node" value={newServer.command} />
+									<Input className={createErrors.command ? 'border-destructive' : ''} onChange={e => { setNewServer(c => ({ ...c, command: e.target.value })); setCreateErrors(c => ({ ...c, command: '' })) }} placeholder="e.g. npx" value={newServer.command} />
+									<FieldError message={createErrors.command} />
 								</div>
 								<div className="space-y-2">
 									<label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{t('admin.mcpServers.argsCsv')}</label>
-									<Input onChange={e => setNewServer(c => ({ ...c, args: e.target.value }))} placeholder="e.g. server.js, --port, 3001" value={newServer.args} />
+									<Input onChange={e => setNewServer(c => ({ ...c, args: e.target.value }))} placeholder="e.g. -y, @playwright/mcp@latest" value={newServer.args} />
 								</div>
 								<div className="space-y-2">
 									<label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{t('admin.mcpServers.env')}</label>
@@ -197,7 +235,8 @@ export default function McpServersPage() {
 							<>
 								<div className="space-y-2">
 									<label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{t('admin.mcpServers.url')}</label>
-									<Input onChange={e => setNewServer(c => ({ ...c, url: e.target.value }))} placeholder="e.g. http://localhost:3001/mcp" value={newServer.url} />
+									<Input className={createErrors.url ? 'border-destructive' : ''} onChange={e => { setNewServer(c => ({ ...c, url: e.target.value })); setCreateErrors(c => ({ ...c, url: '' })) }} placeholder="e.g. http://localhost:3001/mcp" value={newServer.url} />
+									<FieldError message={createErrors.url} />
 								</div>
 								<div className="space-y-2">
 									<label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{t('admin.mcpServers.headers')}</label>
@@ -205,14 +244,20 @@ export default function McpServersPage() {
 								</div>
 							</>
 						)}
-						<Button className="w-full" onClick={() => runAction('create-mcp-server', async () => {
-							const serverName = newServer.name
-							await api.adminCreateMcpServer({ name: serverName, config: buildConfig(newServer) })
-							setNewServer({ name: '', mode: 'stdio', command: '', args: '', env: [], url: '', headers: [] })
-							setCreateOpen(false)
-							await loadAdmin()
-							await pollUntilMcpSettled(serverName)
-						})}>
+						<Button className="w-full" onClick={() => {
+							const errors = validateForm(newServer, true)
+							setCreateErrors(errors)
+							if (Object.keys(errors).length > 0) return
+							runAction('create-mcp-server', async () => {
+								const serverName = newServer.name.trim()
+								await api.adminCreateMcpServer({ name: serverName, config: buildConfig(newServer) })
+								setNewServer({ name: '', mode: 'stdio', command: '', args: '', env: [], url: '', headers: [] })
+								setCreateErrors({})
+								setCreateOpen(false)
+								await loadAdmin()
+								await pollUntilMcpSettled(serverName)
+							})
+						}}>
 							{busyKey === 'create-mcp-server' ? t('admin.mcpServers.connectingStatus') : t('admin.mcpServers.addServer')}
 						</Button>
 					</div>

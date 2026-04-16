@@ -144,7 +144,8 @@ function mapToolPolicyDetailed(policy, catalog = []) {
 		toolDetails: tools.map(toolName => ({
 			name: toolName,
 			description: detailByName.get(toolName)?.description || '',
-			riskLevel: detailByName.get(toolName)?.riskLevel || 'safe'
+			riskLevel: detailByName.get(toolName)?.riskLevel || 'safe',
+			source: detailByName.get(toolName)?.source || 'plugin'
 		}))
 	}
 }

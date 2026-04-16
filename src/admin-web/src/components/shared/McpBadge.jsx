@@ -22,15 +22,37 @@ function mcpStateClass(state) {
 	}
 }
 
+function mcpDotColor(state) {
+	switch (state) {
+		case 'ready': return 'bg-emerald-500'
+		case 'connecting': return 'bg-amber-500'
+		case 'failed': return 'bg-rose-500'
+		default: return 'bg-muted-foreground/50'
+	}
+}
+
+export function McpDot({ serverName, mcpServers }) {
+	const server = mcpServers.find(s => s.name === serverName)
+	const state = server?.state || 'unknown'
+	const lastError = server?.lastError
+	return (
+		<span
+			className={cn('inline-block h-2 w-2 shrink-0 rounded-full', mcpDotColor(state))}
+			title={state === 'failed' && lastError ? `Error: ${lastError}` : state}
+		/>
+	)
+}
+
 export function McpStatusPill({ serverName, mcpServers }) {
 	const server = mcpServers.find(s => s.name === serverName)
 	const state = server?.state || 'unknown'
 	const lastError = server?.lastError
 	return (
 		<span
-			className={cn('inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold', mcpStateClass(state))}
+			className={cn('inline-flex items-center gap-1 rounded-full border px-1.5 leading-4 text-[10px] font-medium', mcpStateClass(state))}
 			title={state === 'failed' && lastError ? `Error: ${lastError}` : undefined}
 		>
+			<span className={cn('h-1.5 w-1.5 rounded-full', mcpDotColor(state))} />
 			{state}
 		</span>
 	)
