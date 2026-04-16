@@ -66,7 +66,10 @@ function ToolCheckboxList({ tools, onChange, toolCatalog, mcpServers }) {
 				)}
 				{grouped.map(cat => {
 					const isOpen = expanded.has(cat.name)
-					const selectedCount = cat.tools.filter(tool => tools.includes(tool.name)).length
+					const catToolNames = cat.tools.map(tool => tool.name)
+					const selectedCount = catToolNames.filter(name => tools.includes(name)).length
+					const allSelected = selectedCount === cat.tools.length
+					const someSelected = selectedCount > 0 && !allSelected
 					return (
 						<div key={cat.name} className="mb-1">
 							<button
@@ -74,6 +77,20 @@ function ToolCheckboxList({ tools, onChange, toolCatalog, mcpServers }) {
 								onClick={() => toggleCategory(cat.name)}
 								type="button"
 							>
+								<input
+									type="checkbox"
+									checked={allSelected}
+									ref={el => { if (el) el.indeterminate = someSelected }}
+									onClick={e => e.stopPropagation()}
+									onChange={() => {
+										if (allSelected) {
+											onChange(tools.filter(name => !catToolNames.includes(name)))
+										} else {
+											onChange([...tools, ...catToolNames.filter(name => !tools.includes(name))])
+										}
+									}}
+									className="shrink-0"
+								/>
 								<ChevronRight className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform duration-200 ${isOpen ? 'rotate-90' : ''}`} />
 								<span>{cat.name}</span>
 								{cat.isMcp && <McpBadge />}
@@ -98,10 +115,11 @@ function ToolCheckboxList({ tools, onChange, toolCatalog, mcpServers }) {
 														className="mt-1"
 													/>
 													<span>
-														<span className="font-medium">{tool.name}</span>
-														{tool.source === 'mcp' && <>{' '}<McpStatusPill serverName={tool.mcpServerName} mcpServers={mcpServers} /></>}
+														<span className="inline-flex items-center gap-1.5 font-medium">
+														{tool.name}
+														{tool.source === 'mcp' && <McpStatusPill serverName={tool.mcpServerName} mcpServers={mcpServers} />}
+													</span>
 														<span className="block text-xs text-muted-foreground">{tool.description}</span>
-														<span className="mt-1 block"><RiskPill riskLevel={tool.riskLevel} /></span>
 													</span>
 												</label>
 											))}
@@ -112,13 +130,31 @@ function ToolCheckboxList({ tools, onChange, toolCatalog, mcpServers }) {
 						</div>
 					)
 				})}
-				{orphanedTools.length > 0 && !search.trim() && (
+				{orphanedTools.length > 0 && !search.trim() && (() => {
+					const orphanSelectedCount = orphanedTools.filter(name => tools.includes(name)).length
+					const orphanAllSelected = orphanSelectedCount === orphanedTools.length
+					const orphanSomeSelected = orphanSelectedCount > 0 && !orphanAllSelected
+					return (
 					<div className="mb-1">
 						<button
 							className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm font-medium hover:bg-muted/50"
 							onClick={() => toggleCategory('__orphaned__')}
 							type="button"
 						>
+							<input
+								type="checkbox"
+								checked={orphanAllSelected}
+								ref={el => { if (el) el.indeterminate = orphanSomeSelected }}
+								onClick={e => e.stopPropagation()}
+								onChange={() => {
+									if (orphanAllSelected) {
+										onChange(tools.filter(name => !orphanedTools.includes(name)))
+									} else {
+										onChange([...tools, ...orphanedTools.filter(name => !tools.includes(name))])
+									}
+								}}
+								className="shrink-0"
+							/>
 							<ChevronRight className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform duration-200 ${expanded.has('__orphaned__') ? 'rotate-90' : ''}`} />
 							<span>{t('admin.toolPolicies.orphanedTools')}</span>
 							<span className="ml-1 rounded bg-destructive/10 px-1.5 py-0.5 text-[10px] font-semibold text-destructive">{orphanedTools.length}</span>
@@ -153,7 +189,8 @@ function ToolCheckboxList({ tools, onChange, toolCatalog, mcpServers }) {
 							)}
 						</AnimatePresence>
 					</div>
-				)}
+					)
+				})()}
 			</div>
 		</div>
 	)
@@ -219,10 +256,10 @@ export default function ToolPoliciesPage() {
 									)}
 								</div>
 							</div>
-							<div className="mt-3 flex flex-wrap gap-2">
+							<div className="mt-3 flex flex-wrap gap-1.5">
 								{(policy.toolDetails || []).map(tool => (
-									<span key={tool.name} className="inline-flex items-center gap-2 rounded-full bg-muted px-2 py-1 text-xs">
-										{tool.name} <RiskPill riskLevel={tool.riskLevel} />
+									<span key={tool.name} className="inline-flex items-center gap-1.5 rounded-full bg-muted/60 px-2 py-0.5">
+										<span className="text-xs">{tool.name}</span> {tool.source !== 'mcp' && <RiskPill riskLevel={tool.riskLevel} />}
 									</span>
 								))}
 							</div>

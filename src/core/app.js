@@ -47,7 +47,7 @@ import { listProtectionRulesApi } from '../protection/api.js'
 import { McpManager } from '../mcp/index.js'
 import { loadMcpConfig, loadMcpConfigRaw, saveMcpConfig } from '../mcp/config.js'
 
-const MCP_SERVER_NAME_RE = /^[a-zA-Z0-9_-]+$/
+const MCP_SERVER_NAME_RE = /^[a-zA-Z0-9@._/-]+$/
 const MCP_SERVER_NAME_MAX = 64
 
 function maskObjectValues(obj) {
@@ -108,12 +108,14 @@ function validateMcpServerName(name) {
 	if (!name || typeof name !== 'string') {
 		throw new HttpError(400, 'Server name is required.')
 	}
-	if (name.length > MCP_SERVER_NAME_MAX) {
+	const trimmed = name.trim()
+	if (trimmed.length > MCP_SERVER_NAME_MAX) {
 		throw new HttpError(400, `Server name must be at most ${MCP_SERVER_NAME_MAX} characters.`)
 	}
-	if (!MCP_SERVER_NAME_RE.test(name)) {
-		throw new HttpError(400, 'Server name must match [a-zA-Z0-9_-].')
+	if (!MCP_SERVER_NAME_RE.test(trimmed)) {
+		throw new HttpError(400, 'Server name must contain only alphanumeric characters, @, ., /, _, - (no spaces or Japanese characters)')
 	}
+	return trimmed
 }
 
 function textBlockMessage(role, text) {
@@ -697,7 +699,7 @@ export class MicroHarnessEngineApp {
 	}
 
 	createAdminMcpServer({ name, config }) {
-		validateMcpServerName(name)
+		name = validateMcpServerName(name)
 		validateMcpServerConfig(config)
 		const existing = loadMcpConfigRaw()
 		if (existing[name]) {
